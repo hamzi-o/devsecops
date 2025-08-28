@@ -1,0 +1,6 @@
+rules:
+- id: py-insecure-deserialization
+  message: Avoid insecure deserialization (pickle.loads)
+  pattern: pickle.loads(...)
+  severity: HIGH
+  languages: [python]
