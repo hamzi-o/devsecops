@@ -10,6 +10,14 @@ jobs:
         uses: actions/checkout@v4
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+          driver-opts: |
+            network=host
+          buildkitd-flags: --allow-insecure-entitlement security.insecure
+          config: |
+            [host]
+            uri = unix:///var/run/docker.sock
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -24,24 +32,16 @@ jobs:
           tags: ${{ secrets.REGISTRY }}/app:${{ github.sha }}
       - name: SAST scan
         run: |
-          python3 metrics/collect.py --step sast --start
           semgrep scan app --config scanners/semgrep_rules.yml --json > sast.json || true
-          python3 metrics/collect.py --step sast --end
       - name: Secrets scan
         run: |
-          python3 metrics/collect.py --step secrets --start
           gitleaks detect --source . --report-path secrets.json || true
-          python3 metrics/collect.py --step secrets --end
       - name: IaC scan
         run: |
-          python3 metrics/collect.py --step iac --start
           checkov -d iac -f scanners/checkov.yml --output json > iac.json || true
-          python3 metrics/collect.py --step iac --end
       - name: SCA scan
         run: |
-          python3 metrics/collect.py --step sca --start
           trivy fs --format json --output sca.json . || true
-          python3 metrics/collect.py --step sca --end
       - name: Generate SBOM
         run: |
           syft dir:app -o json > sbom.json
@@ -62,22 +62,18 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          python3 metrics/collect.py --step inference --start
           python3 risk_model/inference/infer.py \
             --artifacts-dir artifacts \
             --in findings.jsonl \
             --out enriched.jsonl \
             --report report.html
-          python3 metrics/collect.py --step inference --end
       - name: Evaluate adaptive gate
         id: gate
         run: |
           python3 adaptive/evaluate_gate.py > gate.json
       - name: Check gate
         run: |
-          python3 metrics/collect.py --step gate --start
           jq -e '.risk_score >= $(jq .adaptive_threshold gate.json)' enriched.jsonl && exit 1 || exit 0
-          python3 metrics/collect.py --step gate --end --failed ${{ job.status != 'success' }}
       - name: Update threat model
         run: |
           python3 threatmodel/feedback.py enriched.jsonl
@@ -104,14 +100,7 @@ jobs:
           kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
       - name: Red team
         run: |
-          python3 metrics/collect.py --step redteam --start
           python3 redteam/run_attacks.py --target http://${{ vars.STAGING_HOST }} --out redteam_results.json
-          python3 metrics/collect.py --step redteam --end
-      - name: Collect metrics
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          python3 metrics/collect.py --finalize
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -121,4 +110,3 @@ jobs:
             findings.jsonl
             enriched.jsonl
             redteam_results.json
-            metrics.json
