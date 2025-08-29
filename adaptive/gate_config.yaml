@@ -1,0 +1,15 @@
+service: demo-app
+context:
+  asset_tier: P1
+  internet_exposed: true
+  recent_kev_delta_24h: 0
+thresholds:
+  base: 0.70
+  adjustments:
+    asset_tier:
+      P0: -0.10
+      P1: -0.05
+      P2: 0.00
+      P3: 0.05
+    internet_exposed: -0.05
+    recent_kev_delta_24h_present: -0.05

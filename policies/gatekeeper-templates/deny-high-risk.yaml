@@ -1,0 +1,18 @@
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata: { name: k8sdenyrisk }
+spec:
+  crd:
+    spec:
+      names: { kind: K8sDenyRisk }
+      validation: { openAPIV3Schema: { properties: { threshold: { type: number } } } }
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sdenyrisk
+        violation[{"msg": msg}] {
+          input.review.kind.kind == "Deployment"
+          score := to_number(input.review.object.metadata.annotations["risk/score"])
+          score >= input.parameters.threshold
+          msg := sprintf("Risk score %v exceeds threshold %v", [score, input.parameters.threshold])
+        }

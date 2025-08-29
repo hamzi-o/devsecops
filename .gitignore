@@ -1,0 +1,8 @@
+*.jsonl
+*.pt
+kubeconfig
+secrets.txt
+*.pyc
+__pycache__/
+*.json
+*.html

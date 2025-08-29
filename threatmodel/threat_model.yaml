@@ -1,0 +1,15 @@
+services:
+  - name: demo-app
+    data_flows:
+      - from: internet
+        to: demo-app
+        protocols: [http]
+    assumptions:
+      auth_enforced: false
+      rate_limit: basic
+    focus:
+      sast: true
+      iac: true
+      sca: true
+      dast: active
+      redteam: basic
