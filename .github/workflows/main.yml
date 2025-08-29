@@ -2,41 +2,58 @@ name: DevSecOps Pipeline
 on:
   push: { branches: ["main"] }
   pull_request: { branches: ["main"] }
+
 jobs:
   build-and-scan:
     runs-on: self-hosted
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # ✅ Fixed Buildx step
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+          use: true
+
+      - name: Bootstrap builder
+        run: docker buildx inspect --bootstrap
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ secrets.REGISTRY }}
           username: ${{ secrets.GHCR_USERNAME }}
           password: ${{ secrets.GHCR_TOKEN }}
+
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: app
           push: true
           tags: ${{ secrets.REGISTRY }}/app:${{ github.sha }}
+
       - name: SAST scan
         run: |
           semgrep scan app --config scanners/semgrep_rules.yml --json > sast.json || true
+
       - name: Secrets scan
         run: |
           gitleaks detect --source . --report-path secrets.json || true
+
       - name: IaC scan
         run: |
           checkov -d iac -f scanners/checkov.yml --output json > iac.json || true
+
       - name: SCA scan
         run: |
           trivy fs --format json --output sca.json . || true
+
       - name: Generate SBOM
         run: |
           syft dir:app -o json > sbom.json
+
       - name: Merge findings
         run: |
           python3 risk_model/inference/merge_findings.py \
@@ -45,11 +62,13 @@ jobs:
             --iac iac.json \
             --sca sca.json \
             --out findings.jsonl
+
       - name: Download model
         run: |
           curl -L -o artifacts/vuln_prioritizer_checkpoint.pt ${{ secrets.MODEL_CHECKPOINT_URL }}
           echo "${{ secrets.MODEL_CHECKPOINT_SHA256 }}" > model.sha256
           sha256sum -c model.sha256
+
       - name: Run inference
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -59,16 +78,20 @@ jobs:
             --in findings.jsonl \
             --out enriched.jsonl \
             --report report.html
+
       - name: Evaluate adaptive gate
         id: gate
         run: |
           python3 adaptive/evaluate_gate.py > gate.json
+
       - name: Check gate
         run: |
           jq -e '.risk_score >= $(jq .adaptive_threshold gate.json)' enriched.jsonl && exit 1 || exit 0
+
       - name: Update threat model
         run: |
           python3 threatmodel/feedback.py enriched.jsonl
+
       - name: Check drift
         env:
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
@@ -76,6 +99,7 @@ jobs:
           echo "$KUBE_CONFIG" | base64 -d > kubeconfig
           export KUBECONFIG=kubeconfig
           python3 drift/check.py
+
       - name: Deploy
         env:
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
@@ -90,9 +114,11 @@ jobs:
           kubectl apply -f app/k8s/ingress.yaml
           kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
           kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
+
       - name: Red team
         run: |
           python3 redteam/run_attacks.py --target http://${{ vars.STAGING_HOST }} --out redteam_results.json
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
