@@ -62,7 +62,7 @@ jobs:
           syft dir:app -o json > sbom.json
       - name: DAST scan with OWASP ZAP
         run: |
-          docker run -v $(pwd):/zap/wrk/:rw -t owasp/zap2docker-stable zap-baseline.py \
+          docker run -v $(pwd):/zap/wrk/:rw -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
             -t http://${{ vars.STAGING_HOST }} -r zap_report.html -J zap_report.json || true
       - name: Merge findings
         run: |
