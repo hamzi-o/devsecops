@@ -1,10 +1,11 @@
-```yaml
 name: DevSecOps Pipeline
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
   pull_request:
-    branches: ["main"]
+    branches:
+      - main
 jobs:
   build-and-scan:
     runs-on: self-hosted
@@ -130,4 +131,3 @@ jobs:
             redteam_results.json
             zap_report.html
             zap_report.json
-```
