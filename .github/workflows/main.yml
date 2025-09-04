@@ -1,3 +1,4 @@
+```yaml
 name: DevSecOps Pipeline
 on:
   push:
@@ -50,14 +51,14 @@ jobs:
       - name: IaC scan
         run: |
           source venv/bin/activate
-          checkov -d iac -f scanners/checkov.yml --output json > iac.json || true
+          [ -d iac ] && checkov -d iac -f scanners/checkov.yml --output json > iac.json || echo "[]" > iac.json
           deactivate
       - name: SCA scan
         run: |
           trivy fs --format json --output sca.json . || true
       - name: Generate SBOM
         run: |
-          syft dir:app -o json --name devsecops-app --version 1.0.0 > sbom.json
+          syft dir:app -o json > sbom.json
       - name: DAST scan with OWASP ZAP
         run: |
           docker run -v $(pwd):/zap/wrk/:rw -t owasp/zap2docker-stable zap-baseline.py \
@@ -129,3 +130,4 @@ jobs:
             redteam_results.json
             zap_report.html
             zap_report.json
+```

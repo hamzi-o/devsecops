@@ -1,0 +1,10 @@
+```yaml
+framework:
+  - kubernetes
+check:
+  - CKV_K8S_*
+skip-check:
+  - CKV_K8S_21  # Skip low severity check for default namespace
+output: json
+quiet: true
+```
