@@ -1,82 +1,51 @@
-import argparse
 import json
-import os
+     import argparse
+     from pathlib import Path
 
-def load_json(path, default):
-    if not os.path.exists(path): return default
-    try: return json.load(open(path))
-    except: return default
+     def load_json(file_path):
+         if Path(file_path).exists():
+             with open(file_path, 'r') as f:
+                 return json.load(f)
+         return []
 
-def from_semgrep(d):
-    out = []
-    for r in d.get("results", []):
-        out.append({
-            "type": "SAST",
-            "title": f"{r.get('check_id')} in {r.get('path')}",
-            "text": r.get("extra",{}).get("message",""),
-            "severity": r.get("extra",{}).get("severity","INFO"),
-            "tool": "semgrep",
-            "cve": r.get("extra",{}).get("cve",""),
-            "location": r.get("path","unknown")
-        })
-    return out
+     def load_dast_json(file_path):
+         findings = []
+         if Path(file_path).exists():
+             with open(file_path, 'r') as f:
+                 data = json.load(f)
+                 for alert in data.get('site', [{}])[0].get('alerts', []):
+                     findings.append({
+                         'id': alert.get('alertRef', ''),
+                         'type': 'vuln',
+                         'location': alert.get('url', 'Unknown'),
+                         'cvss_score': float(alert.get('riskdesc', '0.0').split('(')[0].strip() or 0.0),
+                         'epss_score': 0.0,  # Placeholder
+                         'is_kev': 0,  # Placeholder
+                         'description': alert.get('desc', ''),
+                         'source': 'zap'
+                     })
+         return findings
 
-def from_gitleaks(d):
-    items = d if isinstance(d,list) else d.get("findings",[])
-    out = []
-    for r in items:
-        out.append({
-            "type": "SECRETS",
-            "title": f"{r.get('RuleID')} in {r.get('File')}",
-            "text": r.get("Description",""),
-            "severity": "HIGH",
-            "tool": "gitleaks",
-            "location": r.get("File","unknown")
-        })
-    return out
+     def main():
+         parser = argparse.ArgumentParser(description="Merge security findings")
+         parser.add_argument('--sast', help="SAST findings (JSON)")
+         parser.add_argument('--secrets', help="Secrets findings (JSON)")
+         parser.add_argument('--iac', help="IaC findings (JSON)")
+         parser.add_argument('--sca', help="SCA findings (JSON)")
+         parser.add_argument('--dast', help="DAST findings (JSON)")
+         parser.add_argument('--out', required=True, help="Output JSONL file")
+         args = parser.parse_args()
 
-def from_checkov(d):
-    out = []
-    for r in d.get("results",{}).get("failed_checks",[]):
-        out.append({
-            "type": "IAC",
-            "title": f"{r.get('check_id')}: {r.get('check_name')}",
-            "text": r.get("file_path",""),
-            "severity": r.get("severity","MEDIUM"),
-            "tool": "checkov",
-            "location": r.get("file_path","unknown")
-        })
-    return out
+         findings = []
+         findings.extend(load_json(args.sast))
+         findings.extend(load_json(args.secrets))
+         findings.extend(load_json(args.iac))
+         findings.extend(load_json(args.sca))
+         findings.extend(load_dast_json(args.dast))
 
-def from_trivy(d):
-    out = []
-    for res in d.get("Results",[]):
-        for v in (res.get("Vulnerabilities") or []):
-            location = f"{res.get('Target','unknown')}:{v.get('PkgName','unknown')}"
-            out.append({
-                "type": "SCA",
-                "title": f"{v.get('VulnerabilityID')} in {v.get('PkgName')}",
-                "text": v.get("Title") or v.get("Description",""),
-                "severity": v.get("Severity","UNKNOWN"),
-                "tool": "trivy",
-                "cve": v.get("VulnerabilityID"),
-                "location": location
-            })
-    return out
+         with open(args.out, 'w') as f:
+             for finding in findings:
+                 f.write(json.dumps(finding) + '\n')
 
-if __name__=="__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--sast",default="sast.json")
-    ap.add_argument("--sca",default="sca.json")
-    ap.add_argument("--iac",default="iac.json")
-    ap.add_argument("--secrets",default="secrets.json")
-    ap.add_argument("--out",required=True)
-    a = ap.parse_args()
-    merged = []
-    merged += from_semgrep(load_json(a.sast,{}))
-    merged += from_gitleaks(load_json(a.secrets,[]))
-    merged += from_checkov(load_json(a.iac,{}))
-    merged += from_trivy(load_json(a.sca,{}))
-    with open(a.out,"w") as f:
-        for m in merged: f.write(json.dumps(m)+"\n")
-    print(f"Merged {len(merged)} findings into {a.out}")
+     if __name__ == "__main__":
+         main()
