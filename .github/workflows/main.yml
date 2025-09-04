@@ -41,6 +41,9 @@ jobs:
         run: |
           echo "${{ secrets.MODEL_CHECKPOINT_SHA256 }} artifacts/vuln_prioritizer_checkpoint.pt" > model.sha256
           sha256sum -c model.sha256
+      - name: Check model artifacts
+        run: |
+          ls artifacts/scaler.pkl artifacts/best_params.pkl artifacts/vuln_prioritizer_checkpoint.pt || exit 1
       - name: SAST scan
         run: |
           source venv/bin/activate
@@ -61,6 +64,7 @@ jobs:
         run: |
           syft dir:app -o json > sbom.json
       - name: DAST scan with OWASP ZAP
+        if: vars.STAGING_HOST != ''
         run: |
           docker run -v $(pwd):/zap/wrk/:rw -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
             -t http://${{ vars.STAGING_HOST }} -r zap_report.html -J zap_report.json || true
