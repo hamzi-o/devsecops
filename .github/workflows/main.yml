@@ -55,7 +55,12 @@ jobs:
       - name: IaC scan
         run: |
           source venv/bin/activate
-          [ -d iac ] && checkov -d iac -f scanners/checkov.yml --output json > iac.json || echo "[]" > iac.json
+          if [ -d app/k8s ] && [ "$(ls -A app/k8s)" ]; then
+            checkov -d app/k8s -f scanners/checkov.yml --output json > iac.json || true
+          else
+            echo "No valid IaC files found in app/k8s, skipping checkov scan"
+            echo "[]" > iac.json
+          fi
           deactivate
       - name: SCA scan
         run: |
@@ -63,11 +68,56 @@ jobs:
       - name: Generate SBOM
         run: |
           syft dir:app -o json > sbom.json
-      - name: DAST scan with OWASP ZAP
-        if: vars.STAGING_HOST != ''
+      - name: Deploy
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        if: github.event_name == 'push'
         run: |
+          echo "$KUBE_CONFIG" | base64 -d > kubeconfig
+          export KUBECONFIG=kubeconfig
+          sed -i "s|\${IMAGE_TAG}|${{ github.sha }}|g" app/k8s/deployment.yaml
+          kubectl apply -f app/k8s/namespace.yaml
+          kubectl apply -f app/k8s/deployment.yaml
+          kubectl apply -f app/k8s/service.yaml
+          kubectl apply -f app/k8s/ingress.yaml
+          kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
+          kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
+      - name: Wait for deployment
+        if: github.event_name == 'push'
+        run: |
+          echo "$KUBE_CONFIG" | base64 -d > kubeconfig
+          export KUBECONFIG=kubeconfig
+          kubectl wait --for=condition=available --timeout=300s deployment/devsecops-app -n devsecops
+          sleep 30s
+      - name: Get STAGING_HOST
+        id: get-host
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        if: github.event_name == 'push'
+        run: |
+          echo "$KUBE_CONFIG" | base64 -d > kubeconfig
+          export KUBECONFIG=kubeconfig
+          STAGING_HOST=$(kubectl get ingress -n devsecops -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' || kubectl get ingress -n devsecops -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' || echo "")
+          if [ -z "$STAGING_HOST" ]; then
+            echo "STAGING_HOST not found, using vars.STAGING_HOST"
+          else
+            echo "STAGING_HOST=http://$STAGING_HOST" >> $GITHUB_ENV
+          fi
+      - name: Validate STAGING_HOST
+        if: github.event_name == 'push'
+        run: |
+          TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
+          if [ -z "$TARGET_HOST" ]; then
+            echo "Error: STAGING_HOST is not set"
+            exit 1
+          fi
+          curl -I $TARGET_HOST || echo "Warning: Failed to reach $TARGET_HOST"
+      - name: DAST scan with OWASP ZAP
+        if: github.event_name == 'push' && (env.STAGING_HOST != '' || vars.STAGING_HOST != '')
+        run: |
+          TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
           docker run -v $(pwd):/zap/wrk/:rw -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
-            -t http://${{ vars.STAGING_HOST }} -r zap_report.html -J zap_report.json || true
+            -t $TARGET_HOST -r zap_report.html -J zap_report.json || true
       - name: Merge findings
         run: |
           source venv/bin/activate
@@ -107,23 +157,11 @@ jobs:
           echo "$KUBE_CONFIG" | base64 -d > kubeconfig
           export KUBECONFIG=kubeconfig
           python3 drift/check.py
-      - name: Deploy
-        env:
-          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
-        if: github.event_name == 'push'
-        run: |
-          echo "$KUBE_CONFIG" | base64 -d > kubeconfig
-          export KUBECONFIG=kubeconfig
-          sed -i "s|\${IMAGE_TAG}|${{ github.sha }}|g" app/k8s/deployment.yaml
-          kubectl apply -f app/k8s/namespace.yaml
-          kubectl apply -f app/k8s/deployment.yaml
-          kubectl apply -f app/k8s/service.yaml
-          kubectl apply -f app/k8s/ingress.yaml
-          kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
-          kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
       - name: Red team
+        if: github.event_name == 'push' && (env.STAGING_HOST != '' || vars.STAGING_HOST != '')
         run: |
-          python3 redteam/run_attacks.py --target http://${{ vars.STAGING_HOST }} --out redteam_results.json
+          TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
+          python3 redteam/run_attacks.py --target $TARGET_HOST --out redteam_results.json
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

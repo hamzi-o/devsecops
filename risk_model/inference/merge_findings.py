@@ -14,11 +14,14 @@ def load_dast_json(file_path):
         with open(file_path, 'r') as f:
             data = json.load(f)
             for alert in data.get('site', [{}])[0].get('alerts', []):
+                riskdesc = alert.get('riskdesc', '0.0').split('(')[0].strip()
+                severity_map = {'High': 8.0, 'Medium': 5.0, 'Low': 3.0, 'Informational': 0.0, '0.0': 0.0}
+                cvss_score = severity_map.get(riskdesc, 0.0)
                 findings.append({
                     'id': alert.get('alertRef', ''),
                     'type': 'vuln',
                     'location': alert.get('url', 'Unknown'),
-                    'cvss_score': float(alert.get('riskdesc', '0.0').split('(')[0].strip() or 0.0),
+                    'cvss_score': cvss_score,
                     'epss_score': 0.0,  # Placeholder
                     'is_kev': 0,  # Placeholder
                     'description': alert.get('desc', ''),
