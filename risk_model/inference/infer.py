@@ -1,123 +1,170 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import torch
-import networkx as nx
-import numpy as np
-from torch_geometric.utils import from_networkx
-from torch_geometric.nn import SAGEConv
-import os
-import requests
 import argparse
-import jinja2
 import json
+import pickle
+import torch
+import torch.nn.functional as F
+from torch_geometric.data import Data
+from torch_geometric.nn import GCNConv
+import numpy as np
+import pandas as pd
+from pathlib import Path
+import html
 
-app = FastAPI(title="Vulnerability Prioritization API")
-
-class GraphRequest(BaseModel):
-    graph_json: dict
-
-class VGNN(torch.nn.Module):
-    def __init__(self, in_channels, hidden=128):
+class GCN(torch.nn.Module):
+    def __init__(self, in_dim, hidden_dim, dropout_rate):
         super().__init__()
-        self.conv1 = SAGEConv(in_channels, hidden)
-        self.conv2 = SAGEConv(hidden, hidden)
-        self.lin = torch.nn.Linear(hidden, 1)
+        self.conv1 = GCNConv(in_dim, hidden_dim)
+        self.bn1 = torch.nn.BatchNorm1d(hidden_dim)
+        self.conv2 = GCNConv(hidden_dim, hidden_dim // 2)
+        self.bn2 = torch.nn.BatchNorm1d(hidden_dim // 2)
+        self.fc = torch.nn.Linear(hidden_dim // 2, 1)
+        self.dropout = torch.nn.Dropout(dropout_rate)
 
-    def forward(self, x, edge_index):
-        x = torch.relu(self.conv1(x, edge_index))
-        x = torch.relu(self.conv2(x, edge_index))
-        return self.lin(x).squeeze(-1)
+    def forward(self, x, edge_index, edge_attr=None):
+        x = F.relu(self.bn1(self.conv1(x, edge_index, edge_attr)))
+        x = self.dropout(x)
+        x = F.relu(self.bn2(self.conv2(x, edge_index, edge_attr)))
+        x = self.dropout(x)
+        x = self.fc(x)
+        return x
 
-# Load model
-ckpt = torch.load("artifacts/vuln_prioritizer_checkpoint.pt", map_location='cpu')
-model = VGNN(in_channels=len(ckpt['type_to_idx']) + 5 + 768)
-model.load_state_dict(ckpt['model_state_dict'])
-model.eval()
+def load_findings(findings_file):
+    findings = []
+    with open(findings_file, 'r') as f:
+        for line in f:
+            finding = json.loads(line.strip())
+            findings.append(finding)
+    return findings
 
-@app.post("/rank")
-def rank_graph(req: GraphRequest):
-    try:
-        G = nx.node_link_graph(req.graph_json)
-        data = from_networkx(G, group_node_attrs=['feat_vec'])
-        data.x = torch.tensor([n['feat_vec'] for _, n in G.nodes(data=True)]).float()
-        with torch.no_grad():
-            scores = torch.sigmoid(model(data.x, data.edge_index)).numpy()
-        return {"node_ids": ckpt['node_id_map'], "scores": scores.tolist()}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+def create_graph_data(findings, scaler):
+    x_list, edge_list, edge_attr_list, locations = [], [], [], []
+    node_mapping = {}
+    
+    for idx, finding in enumerate(findings):
+        node_id = f"finding:{idx}"
+        node_mapping[node_id] = idx
+        
+        # Extract features
+        cvss = float(finding.get('cvss_score', 0.0))
+        epss = float(finding.get('epss_score', 0.0))
+        is_kev = int(finding.get('is_kev', 0))
+        code_emb = np.zeros(768, dtype=np.float32)  # Placeholder for CodeBERT
+        node_type = [1, 0] if finding.get('type') == 'vuln' else [0, 1]
+        
+        # Extract location for report
+        location = finding.get('location', 'Unknown')
+        locations.append(location)
+        
+        # Combine features
+        feat = np.concatenate([node_type, [cvss, epss, is_kev], code_emb]).astype(np.float32)
+        feat = np.nan_to_num(feat, nan=0.0, posinf=0.0, neginf=0.0)
+        x_list.append(feat)
+        
+        # Add synthetic edges (e.g., connect findings with same package)
+        pkg = finding.get('package', None)
+        if pkg:
+            for j, other in enumerate(findings):
+                if j != idx and other.get('package') == pkg:
+                    edge_list.append([idx, j])
+                    edge_attr_list.append([max(cvss / 10.0, epss)])
+    
+    # Normalize features
+    x_array = np.array(x_list, dtype=np.float32)
+    if x_array.shape[0] > 0:
+        x_array[:, 2:4] = scaler.transform(x_array[:, 2:4])
+    
+    # Create PyG Data
+    edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous() if edge_list else torch.empty((2, 0), dtype=torch.long)
+    edge_attr = torch.tensor(edge_attr_list, dtype=torch.float32) if edge_attr_list else torch.empty((0,), dtype=torch.float32)
+    x = torch.tensor(x_array, dtype=torch.float32)
+    return Data(x=x, edge_index=edge_index, edge_attr=edge_attr), locations
 
-def to_priority(score):
-    return "P1" if score >= 0.75 else ("P2" if score >= 0.55 else ("P3" if score >= 0.35 else "P4"))
+def generate_html_report(findings, scores, locations, output_file):
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Security Report</title>
+        <style>
+            table { border-collapse: collapse; width: 100%; }
+            th, td { border: 1px solid black; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+        </style>
+    </head>
+    <body>
+        <h1>Security Report</h1>
+        <table>
+            <tr>
+                <th>ID</th>
+                <th>Type</th>
+                <th>Location</th>
+                <th>CVSS</th>
+                <th>EPSS</th>
+                <th>KEV</th>
+                <th>Risk Score</th>
+            </tr>
+    """
+    for idx, (finding, score, loc) in enumerate(zip(findings, scores, locations)):
+        html_content += f"""
+            <tr>
+                <td>{html.escape(str(finding.get('id', idx)))}</td>
+                <td>{html.escape(str(finding.get('type', 'Unknown')))}</td>
+                <td>{html.escape(str(loc))}</td>
+                <td>{finding.get('cvss_score', 0.0):.1f}</td>
+                <td>{finding.get('epss_score', 0.0):.4f}</td>
+                <td>{'Yes' if finding.get('is_kev', 0) else 'No'}</td>
+                <td>{score:.4f}</td>
+            </tr>
+        """
+    html_content += """
+        </table>
+    </body>
+    </html>
+    """
+    with open(output_file, 'w') as f:
+        f.write(html_content)
+
+def main():
+    parser = argparse.ArgumentParser(description="Run inference on security findings")
+    parser.add_argument('--artifacts-dir', required=True, help="Directory containing model artifacts")
+    parser.add_argument('--in', required=True, dest='input_file', help="Input findings file (JSONL)")
+    parser.add_argument('--out', required=True, dest='output_file', help="Output enriched findings file (JSONL)")
+    parser.add_argument('--report', required=True, help="Output HTML report file")
+    args = parser.parse_args()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    artifacts_dir = Path(args.artifacts_dir)
+    
+    # Load artifacts
+    scaler = pickle.load(open(artifacts_dir / "scaler.pkl", "rb"))
+    best_params = pickle.load(open(artifacts_dir / "best_params.pkl", "rb"))
+    model = GCN(in_dim=773, hidden_dim=best_params['hidden_dim'], dropout_rate=best_params['dropout_rate']).to(device)
+    model.load_state_dict(torch.load(artifacts_dir / "vuln_prioritizer_checkpoint.pt", map_location=device))
+    model.eval()
+
+    # Load findings
+    findings = load_findings(args.input_file)
+    data, locations = create_graph_data(findings, scaler)
+    data = data.to(device)
+
+    # Run inference
+    with torch.no_grad():
+        scores = torch.sigmoid(model(data.x, data.edge_index, data.edge_attr)).cpu().numpy().flatten()
+
+    # Enrich findings
+    enriched = []
+    for finding, score, loc in zip(findings, scores, locations):
+        finding['risk_score'] = float(score)
+        finding['location'] = loc
+        enriched.append(finding)
+    
+    # Save enriched findings
+    with open(args.output_file, 'w') as f:
+        for finding in enriched:
+            f.write(json.dumps(finding) + '\n')
+    
+    # Generate HTML report
+    generate_html_report(findings, scores, locations, args.report)
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--artifacts-dir", required=True)
-    ap.add_argument("--in", dest="inp", required=True)
-    ap.add_argument("--out", required=True)
-    ap.add_argument("--report", required=True)
-    ap.add_argument("--openai-api-key", default=os.getenv("OPENAI_API_KEY"))
-    ap.add_argument("--openai-model", default="gpt-4o-mini")
-    a = ap.parse_args()
-
-    # Build graph from findings
-    G = nx.MultiDiGraph()
-    findings = [json.loads(l) for l in open(a.inp)]
-    for i, f in enumerate(findings):
-        vuln_node = f"vuln:{f.get('cve', f'tmp_{i}')}"
-        G.add_node(vuln_node, node_type='vuln', label=1, cvss=0.0, epss=0.0, is_kev=0, reachable=0, hit_count=0, code_emb=np.zeros(768))
-        if 'cve' in f:
-            r = requests.get(f"https://api.first.org/data/v1/epss?cve={f['cve']}", timeout=10)
-            G.nodes[vuln_node]['epss'] = float(r.json()['data'][0]['epss']) if r.json().get('data') else 0.0
-            G.nodes[vuln_node]['is_kev'] = 1 if f['cve'] in requests.get("https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json").json().get('vulnerabilities', []) else 0
-
-    # Add SBOM and runtime data
-    sbom = json.load(open("sbom.json")) if os.path.exists("sbom.json") else {'artifacts': []}
-    for pkg in sbom.get('artifacts', []):
-        pkg_node = f"pkg:{pkg.get('name')}:{pkg.get('version')}"
-        G.add_node(pkg_node, node_type='package', name=pkg.get('name'), version=pkg.get('version'))
-        G.add_edge(vuln_node, pkg_node, edge_type='affects_package')
-
-    # Convert to PyG
-    types = list({d['node_type'] for _, d in G.nodes(data=True)})
-    type_to_idx = {t: i for i, t in enumerate(types)}
-    for n, d in G.nodes(data=True):
-        oh = [0] * len(types); oh[type_to_idx[d['node_type']]] = 1
-        feat = oh + [d.get('cvss', 0.0), d.get('epss', 0.0), d.get('is_kev', 0), d.get('reachable', 0), d.get('hit_count', 0)]
-        feat += d['code_emb'].tolist()
-        G.nodes[n]['feat_vec'] = np.array(feat, dtype=np.float32)
-        G.nodes[n]['y'] = d.get('label', 0)
-
-    data = from_networkx(G, group_node_attrs=['feat_vec', 'y'])
-    data.x = torch.tensor([n['feat_vec'] for _, n in G.nodes(data=True)]).float()
-    data.y = torch.tensor([n['y'] for _, n in G.nodes(data=True)]).long()
-
-    # Inference
-    with torch.no_grad():
-        scores = torch.sigmoid(model(data.x, data.edge_index)).numpy()
-    node_ids = list(G.nodes())
-    enriched = []
-    for f, node, score in zip(findings, node_ids, scores):
-        f["risk_score"] = float(score)
-        f["priority"] = to_priority(float(score))
-        enriched.append(f)
-
-    with open(a.out, "w") as f:
-        for e in enriched: f.write(json.dumps(e) + "\n")
-
-    # Generate LLM report (optional)
-    llm_summary = "(LLM disabled)"
-    if a.openai_api_key:
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=a.openai_api_key)
-            top = sorted(enriched, key=lambda x: x["risk_score"], reverse=True)[:15]
-            prompt = "Summarize and prioritize these findings and propose concrete remediation steps:\n" + json.dumps(top, indent=2)
-            resp = client.chat.completions.create(model=a.openai_model, messages=[{"role": "user", "content": prompt}], temperature=0.2)
-            llm_summary = resp.choices[0].message.content
-        except Exception as e:
-            llm_summary = f"(LLM summary unavailable: {str(e)}. Check API key or network.)"
-
-    tpl = jinja2.Template(open("reporting/template.html").read())
-    html = tpl.render(findings=enriched, summary=llm_summary)
-    open(a.report, "w").write(html)
-    print("Report written:", a.report)
+    main()
