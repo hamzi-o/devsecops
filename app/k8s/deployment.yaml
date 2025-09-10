@@ -3,81 +3,44 @@ kind: Deployment
 metadata:
   name: demo-app
   namespace: app-test
-  annotations:
-    risk/score: "0.0"
 spec:
   replicas: 2
-  selector: 
-    matchLabels: 
+  selector:
+    matchLabels:
       app: demo-app
   template:
-    metadata: 
-      labels: 
+    metadata:
+      labels:
         app: demo-app
     spec:
-      imagePullSecrets:
-        - name: ghcr-secret
-      securityContext: 
-        runAsNonRoot: true
-        runAsUser: 65532  # Match Dockerfile user
-        fsGroup: 65532
       containers:
         - name: app
-          image: ghcr.io/hamzi-o/devsecops-as-code/app:${IMAGE_TAG}
-          imagePullPolicy: Always
-          ports: 
+          image: ghcr.io/devsecops/app:${IMAGE_TAG}
+          ports:
             - containerPort: 8080
-              name: http
-          livenessProbe: 
-            httpGet: 
+          livenessProbe:
+            httpGet:
               path: /
               port: 8080
-              scheme: HTTP
             initialDelaySeconds: 30
-            periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 3
-            successThreshold: 1
-          readinessProbe: 
-            httpGet: 
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
               path: /
               port: 8080
-              scheme: HTTP
             initialDelaySeconds: 15
-            periodSeconds: 5
             timeoutSeconds: 3
-            failureThreshold: 3
-            successThreshold: 1
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            runAsNonRoot: true
-            runAsUser: 65532
-            capabilities: 
-              drop: ["ALL"]
-          volumeMounts:
-            - name: tmp-volume
-              mountPath: /tmp
-            - name: var-tmp-volume
-              mountPath: /var/tmp
-            - name: home-volume
-              mountPath: /home/nonroot
+            periodSeconds: 5
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: PYTHONDONTWRITEBYTECODE
               value: "1"
           resources:
-            requests: 
-              cpu: "100m"
-              memory: "128Mi"
-            limits: 
+            limits:
               cpu: "500m"
               memory: "512Mi"
-      volumes:
-        - name: tmp-volume
-          emptyDir: {}
-        - name: var-tmp-volume
-          emptyDir: {}
-        - name: home-volume
-          emptyDir: {}
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
