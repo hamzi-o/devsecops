@@ -1,1 +1,11 @@
-semgrep==1.68.0 checkov==3.2.261 jinja2==3.1.4 sentence-transformers==2.7.0 joblib==1.4.2 scikit-learn==1.4.2 lightgbm==4.3.0 openai==1.35.0 pyyaml==6.0.2 urllib3==1.26.20
+semgrep==1.68.0
+checkov==3.2.261
+jinja2==3.1.4
+sentence-transformers==2.7.0
+joblib==1.4.2
+scikit-learn==1.4.2
+lightgbm==4.3.0
+openai==1.35.0
+pyyaml==6.0.2
+urllib3==1.26.20
+owasp-zap==0.0.17
