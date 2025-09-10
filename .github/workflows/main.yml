@@ -27,16 +27,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login GHCR
-        if: secrets.GHCR_TOKEN != ''
+        if: ${{ secrets.GHCR_TOKEN != '' }}
         run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
       - name: Build & push image
         id: meta
         run: |
           GIT_SHA=$(git rev-parse --short HEAD)
           echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
-          docker build -t $REGISTRY/app:$GIT_SHA -t $REGISTRY/app:latest app
-          docker push $REGISTRY/app:$GIT_SHA
-          docker push $REGISTRY/app:latest
+          docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest app
+          docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
+          docker push ${{ secrets.REGISTRY }}/app:latest
       - name: Install scanners
         run: |
           source venv/bin/activate
@@ -52,7 +52,7 @@ jobs:
           if [ "${{ matrix.scanner }}" = "semgrep" ]; then semgrep --config=scanners/semgrep_rules.yml --json > sast.json || true; fi
           if [ "${{ matrix.scanner }}" = "gitleaks" ]; then gitleaks detect --source=. --report-format json --report-path secrets.json || true; fi
           if [ "${{ matrix.scanner }}" = "checkov" ]; then checkov -d app/k8s --output json -f scanners/checkov.yml > iac.json || true; fi
-          if [ "${{ matrix.scanner }}" = "trivy" ]; then trivy image --format json -o sca.json $REGISTRY/app:${{ steps.meta.outputs.image_tag }} || true; fi
+          if [ "${{ matrix.scanner }}" = "trivy" ]; then trivy image --format json -o sca.json ${{ secrets.REGISTRY }}/app:${{ steps.meta.outputs.image_tag }} || true; fi
           if [ "${{ matrix.scanner }}" = "syft" ]; then syft dir:app -o json > sbom.json; fi
           deactivate
       - name: Merge findings
@@ -100,6 +100,12 @@ jobs:
           if [ "$VIOL" -gt 0 ]; then echo "Adaptive gate failed"; exit 1; fi
         env:
           THR: ${{ steps.gate.outputs.threshold }}
+      - name: Collect and push metrics
+        run: |
+          source venv/bin/activate
+          python3 metrics/collect_metrics.py
+          python3 metrics/prometheus_push.py
+          deactivate
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -114,6 +120,7 @@ jobs:
             enriched.jsonl
             report.html
             thr.json
+            metrics.json
   deploy:
     runs-on: self-hosted
     needs: build-and-scan
