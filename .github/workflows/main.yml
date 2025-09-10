@@ -59,6 +59,14 @@ jobs:
           # Apply namespace first
           kubectl apply -f app/k8s/namespace.yaml
           
+          # Create image pull secret for GHCR
+          kubectl create secret docker-registry ghcr-secret \
+            --docker-server=${{ secrets.REGISTRY }} \
+            --docker-username=${{ secrets.GHCR_USERNAME }} \
+            --docker-password=${{ secrets.GHCR_TOKEN }} \
+            --namespace=app-test \
+            --dry-run=client -o yaml | kubectl apply -f -
+          
           # Apply other manifests
           kubectl apply -f app/k8s/deployment.yaml
           kubectl apply -f app/k8s/service.yaml
