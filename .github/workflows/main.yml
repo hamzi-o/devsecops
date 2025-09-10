@@ -124,7 +124,14 @@ jobs:
           echo "=== Deployment Successful ==="
           kubectl get pods -n app-test -l app=demo-app
 
+      - name: Clear runner cache
+        run: |
+          rm -rf $HOME/.local/bin/trivy
+          rm -rf $HOME/.cache/*
+
       - name: Install local scanners
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p $HOME/.local/bin
           export PATH=$HOME/.local/bin:$PATH
@@ -132,8 +139,23 @@ jobs:
           pip install semgrep checkov jinja2 sentence-transformers joblib scikit-learn lightgbm openai pyyaml
           deactivate
           
-          # Install security scanners
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin
+          # Install Trivy with checksum verification
+          TRIVY_VERSION="0.66.0"
+          curl -L -H "Authorization: token $GITHUB_TOKEN" -o trivy.tar.gz https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz
+          curl -L -H "Authorization: token $GITHUB_TOKEN" -o checksums.txt https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_checksums.txt
+          echo "Verifying checksum..."
+          sha256sum --check --ignore-missing checksums.txt
+          if [ $? -ne 0 ]; then
+            echo "Checksum verification failed"
+            exit 1
+          fi
+          tar -xzf trivy.tar.gz -C $HOME/.local/bin
+          if [ $? -ne 0 ]; then
+            echo "Failed to extract Trivy tarball"
+            exit 1
+          fi
+          
+          # Install other security scanners
           curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
           curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
