@@ -44,18 +44,18 @@ jobs:
         run: |
           GIT_SHA=$(git rev-parse --short HEAD)
           echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
-          echo "Building image: ${{ secrets.REGISTRY }}/devsecops/app:$GIT_SHA"
-          docker build -t ${{ secrets.REGISTRY }}/devsecops/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/devsecops/app:latest app
+          echo "Building image: ${{ secrets.REGISTRY }}/hamzi-o/devsecops/app:$GIT_SHA"
+          docker build -t ${{ secrets.REGISTRY }}/hamzi-o/devsecops/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/hamzi-o/devsecops/app:latest app
           if [ $? -ne 0 ]; then
             echo "Docker build failed"
             exit 1
           fi
-          docker push ${{ secrets.REGISTRY }}/devsecops/app:$GIT_SHA
+          docker push ${{ secrets.REGISTRY }}/hamzi-o/devsecops/app:$GIT_SHA
           if [ $? -ne 0 ]; then
             echo "Docker push failed for tag $GIT_SHA"
             exit 1
           fi
-          docker push ${{ secrets.REGISTRY }}/devsecops/app:latest
+          docker push ${{ secrets.REGISTRY }}/hamzi-o/devsecops/app:latest
           if [ $? -ne 0 ]; then
             echo "Docker push failed for tag latest"
             exit 1
