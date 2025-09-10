@@ -1,74 +1,327 @@
-name: Debug Docker Push
+name: DevSecOps Pipeline
 on:
   push:
     branches: ["main"]
+  pull_request:
+    branches: ["main"]
 
 jobs:
-  debug-docker:
+  build-deploy-scan:
     runs-on: self-hosted
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Debug GHCR Login and Push
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Set up Python virtual environment
         run: |
-          echo "=== Environment Check ==="
-          echo "Registry: ${{ secrets.REGISTRY }}"
-          echo "Username: ${{ secrets.GHCR_USERNAME }}"
-          echo "Token length: ${#GHCR_TOKEN}"
-          
-          echo "=== Docker Login ==="
-          echo "${{ secrets.GHCR_TOKEN }}" | docker login ${{ secrets.REGISTRY }} -u ${{ secrets.GHCR_USERNAME }} --password-stdin
-          
-          echo "=== Build Simple Test Image ==="
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          deactivate
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Bootstrap builder
+        run: docker buildx inspect --bootstrap
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY }}
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Build & push Docker image
+        id: meta
+        run: |
           GIT_SHA=$(git rev-parse --short HEAD)
-          echo "Git SHA: $GIT_SHA"
+          echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
+          docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest app
+          docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
+          docker push ${{ secrets.REGISTRY }}/app:latest
+          # Replace IMAGE_TAG in deployment manifest
+          sed -i "s|\${IMAGE_TAG}|$GIT_SHA|g" app/k8s/deployment.yaml
+
+      - name: Deploy app to k3s
+        run: |
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
+          chmod 600 kubeconfig
+          export KUBECONFIG=kubeconfig
           
-          # Create a simple test Dockerfile
-          cat > Dockerfile.test << 'EOF'
-          FROM alpine:latest
-          RUN echo "Test image" > /test.txt
-          CMD ["cat", "/test.txt"]
-          EOF
+          # Apply namespace first
+          kubectl apply -f app/k8s/namespace.yaml
           
-          echo "=== Building Test Image ==="
-          docker build -f Dockerfile.test -t ${{ secrets.REGISTRY }}/test:$GIT_SHA .
+          # Create image pull secret for GHCR
+          kubectl create secret docker-registry ghcr-secret \
+            --docker-server=${{ secrets.REGISTRY }} \
+            --docker-username=${{ secrets.GHCR_USERNAME }} \
+            --docker-password=${{ secrets.GHCR_TOKEN }} \
+            --namespace=app-test \
+            --dry-run=client -o yaml | kubectl apply -f -
           
-          echo "=== Local Images ==="
-          docker images | grep test
+          # Apply other manifests
+          kubectl apply -f app/k8s/deployment.yaml
+          kubectl apply -f app/k8s/service.yaml
+          kubectl apply -f app/k8s/ingress.yaml
+          kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
+          kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
           
-          echo "=== Push Test Image ==="
-          if docker push ${{ secrets.REGISTRY }}/test:$GIT_SHA; then
-            echo "✅ Push successful"
-          else
-            echo "❌ Push failed"
+          # Wait a moment for pods to start
+          sleep 10
+          
+          # Debug information
+          echo "=== Deployment Status ==="
+          kubectl get deployment demo-app -n app-test -o wide
+          echo "=== Pod Status ==="
+          kubectl get pods -n app-test -o wide
+          echo "=== Recent Events ==="
+          kubectl get events -n app-test --sort-by='.lastTimestamp' | tail -10
+          
+          # Wait for rollout with extended timeout and better error handling
+          if ! kubectl rollout status -n app-test deploy/demo-app --timeout=600s; then
+            echo "=== DEPLOYMENT FAILED - DETAILED DEBUG INFO ==="
+            echo "=== Deployment Description ==="
+            kubectl describe deployment demo-app -n app-test
+            echo "=== Pod Descriptions ==="
+            kubectl describe pods -n app-test -l app=demo-app
+            echo "=== Pod Logs ==="
+            kubectl logs -n app-test -l app=demo-app --tail=50 --all-containers=true --previous=false || true
+            echo "=== Previous Pod Logs (if any) ==="
+            kubectl logs -n app-test -l app=demo-app --tail=20 --all-containers=true --previous=true || true
+            echo "=== All Events ==="
+            kubectl get events -n app-test --sort-by='.lastTimestamp'
             exit 1
           fi
           
-          echo "=== Verify Push ==="
-          docker rmi ${{ secrets.REGISTRY }}/test:$GIT_SHA || true
-          if docker pull ${{ secrets.REGISTRY }}/test:$GIT_SHA; then
-            echo "✅ Image can be pulled back"
+          echo "=== Deployment Successful ==="
+          kubectl get pods -n app-test -l app=demo-app
+
+      - name: Install local scanners
+        run: |
+          mkdir -p $HOME/.local/bin
+          export PATH=$HOME/.local/bin:$PATH
+          source venv/bin/activate
+          pip install semgrep checkov jinja2 sentence-transformers joblib scikit-learn lightgbm openai pyyaml
+          deactivate
+          
+          # Install security scanners
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
+          curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
+          curl -L https://github.com/zaproxy/zaproxy/releases/latest/download/ZAP_Linux.tar.gz | tar -xzf - -C $HOME/.local/bin zap
+          
+          # Add to PATH for this session
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Verify scanner installation
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          echo "=== Scanner Versions ==="
+          semgrep --version
+          checkov --version
+          trivy --version
+          syft --version
+          conftest version || true
+          gitleaks version
+          zap.sh -version
+
+      - name: Run SAST scan
+        continue-on-error: true
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          source venv/bin/activate
+          semgrep --config scanners/semgrep_rules.yml --json > sast.json || echo "[]" > sast.json
+          deactivate
+
+      - name: Run Secrets scan
+        continue-on-error: true
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          gitleaks detect --source . --report-path secrets.json || echo "[]" > secrets.json
+
+      - name: Run IaC scan
+        continue-on-error: true
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          source venv/bin/activate
+          if [ -d app/k8s ] && [ "$(ls -A app/k8s)" ]; then
+            checkov -d app/k8s --output json -f scanners/checkov.yml > iac.json || echo "[]" > iac.json
           else
-            echo "❌ Image cannot be pulled back"
-            exit 1
+            echo "[]" > iac.json
+          fi
+          deactivate
+
+      - name: Run SCA scan
+        continue-on-error: true
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          trivy fs --format json --output sca.json . || echo "[]" > sca.json
+
+      - name: Generate SBOM
+        continue-on-error: true
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          syft dir:app -o json > sbom.json || echo "[]" > sbom.json
+
+      - name: Wait for service to be ready
+        run: |
+          export KUBECONFIG=kubeconfig
+          echo "=== Waiting for service to be ready ==="
+          kubectl wait --for=condition=ready pod -n app-test -l app=demo-app --timeout=300s
+          
+          # Get service endpoint
+          kubectl get service demo-app-svc -n app-test
+          kubectl get ingress -n app-test
+
+      - name: DAST scan with OWASP ZAP
+        continue-on-error: true
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          export KUBECONFIG=kubeconfig
+          source venv/bin/activate
+          
+          # Try to get target host from ingress
+          TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+          
+          if [ -z "$TARGET_HOST" ]; then
+            # Fallback to service ClusterIP for internal testing
+            TARGET_HOST=$(kubectl get service demo-app-svc -n app-test -o jsonpath='{.spec.clusterIP}')
+            echo "Using ClusterIP: $TARGET_HOST"
+          else
+            echo "Using Ingress IP: $TARGET_HOST"
           fi
           
-          echo "=== Test App Build ==="
-          docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA app/
-          
-          echo "=== App Images ==="
-          docker images | grep app
-          
-          echo "=== Push App Image ==="
-          if docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA; then
-            echo "✅ App push successful"
+          if [ -n "$TARGET_HOST" ]; then
+            zap.sh -cmd -quickurl http://$TARGET_HOST:8080 -quickout zap.json -configfile scanners/zap_config.yml || echo "[]" > zap.json
           else
-            echo "❌ App push failed"
-            exit 1
+            echo "No target host found, skipping DAST scan"
+            echo "[]" > zap.json
           fi
-          
-          echo "=== Final verification ==="
-          docker pull ${{ secrets.REGISTRY }}/app:$GIT_SHA && echo "✅ App image accessible" || echo "❌ App image not accessible"
+          deactivate
+
+      - name: Merge findings
+        run: |
+          source venv/bin/activate
+          python3 risk_model/inference/merge_findings.py \
+            --sast sast.json \
+            --secrets secrets.json \
+            --iac iac.json \
+            --sca sca.json \
+            --dast zap.json \
+            --out findings.jsonl
+          deactivate
+
+      - name: AI inference + HTML report
         env:
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          source venv/bin/activate
+          python3 risk_model/inference/infer.py \
+            --artifacts-dir risk_model/artifacts \
+            --in findings.jsonl \
+            --out enriched.jsonl \
+            --report report.html
+          deactivate
+
+      - name: Evaluate adaptive gate
+        id: gate
+        run: |
+          source venv/bin/activate
+          python3 adaptive/evaluate_gate.py > gate.json
+          THRESHOLD=$(jq -r .adaptive_threshold gate.json)
+          echo "threshold=$THRESHOLD" >> $GITHUB_OUTPUT
+          echo "Adaptive threshold set to: $THRESHOLD"
+          deactivate
+
+      - name: Check gate
+        run: |
+          THRESH=${{ steps.gate.outputs.threshold }}
+          echo "Checking findings against threshold: $THRESH"
+          
+          VIOL=$(python3 -c "
+          import json
+          import sys
+          import os
+          
+          threshold = float(os.environ['THRESH'])
+          violations = 0
+          
+          try:
+              with open('enriched.jsonl', 'r') as f:
+                  for line in f:
+                      if line.strip():
+                          finding = json.loads(line)
+                          risk_score = finding.get('risk_score', 0)
+                          if risk_score >= threshold:
+                              violations += 1
+                              print(f'High-risk finding: {finding.get(\"title\", \"Unknown\")} (score: {risk_score})', file=sys.stderr)
+          except FileNotFoundError:
+              print('No enriched findings file found', file=sys.stderr)
+          except Exception as e:
+              print(f'Error processing findings: {e}', file=sys.stderr)
+          
+          print(violations)
+          ")
+          
+          echo "Findings above threshold: $VIOL"
+          if [ "$VIOL" -gt 0 ]; then 
+            echo "❌ Quality gate failed: $VIOL high-risk findings detected"
+            exit 1
+          else
+            echo "✅ Quality gate passed: No high-risk findings"
+          fi
+        env:
+          THRESH: ${{ steps.gate.outputs.threshold }}
+
+      - name: Run Red Team tests
+        continue-on-error: true
+        run: |
+          export KUBECONFIG=kubeconfig
+          source venv/bin/activate
+          
+          # Get target host same way as DAST scan
+          TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+          
+          if [ -z "$TARGET_HOST" ]; then
+            TARGET_HOST=$(kubectl get service demo-app-svc -n app-test -o jsonpath='{.spec.clusterIP}')
+          fi
+          
+          if [ -n "$TARGET_HOST" ]; then
+            python3 redteam/run_attacks.py --target http://$TARGET_HOST:8080 --out redteam_results.json || echo "[]" > redteam_results.json
+          else
+            echo "No target host found for red team tests"
+            echo "[]" > redteam_results.json
+          fi
+          deactivate
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-report-${{ github.run_number }}
+          path: |
+            report.html
+            findings.jsonl
+            enriched.jsonl
+            redteam_results.json
+            zap.json
+            sast.json
+            secrets.json
+            iac.json
+            sca.json
+            sbom.json
+            gate.json
+
+      - name: Clean up kubeconfig
+        if: always()
+        run: |
+          rm -f kubeconfig
