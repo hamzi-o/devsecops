@@ -1,16 +1,17 @@
 name: DevSecOps Pipeline
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
   pull_request:
-    branches: ["main"]
+    branches:
+      - main
 
 jobs:
-  build-deploy-scan:
+  build-and-scan:
     runs-on: self-hosted
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Cache Python dependencies
         uses: actions/cache@v4
@@ -26,11 +27,27 @@ jobs:
           pip install -r requirements.txt
           deactivate
 
+      - name: Set up local bin
+        run: mkdir -p $HOME/.local/bin
+
+      - name: Install scanners locally
+        run: |
+          source venv/bin/activate
+          pip install semgrep checkov jinja2 sentence-transformers joblib scikit-learn lightgbm openai pyyaml
+          deactivate
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xz -C $HOME/.local/bin gitleaks
+          curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xz -C $HOME/.local/bin conftest
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
+
+      - name: Add local bin to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Bootstrap builder
-        run: docker buildx inspect --bootstrap
+        with:
+          install: true
+          use: true
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -39,18 +56,25 @@ jobs:
           username: ${{ secrets.GHCR_USERNAME }}
           password: ${{ secrets.GHCR_TOKEN }}
 
-      - name: Build & push Docker image
+      - name: Build and push Docker image
         id: meta
         run: |
           GIT_SHA=$(git rev-parse --short HEAD)
           echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
-          docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest app
+          docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest ./app
           docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
           docker push ${{ secrets.REGISTRY }}/app:latest
 
-      - name: Deploy app to k3s
+      - name: Replace IMAGE_TAG in deployment manifest
         run: |
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
+          GIT_SHA=${{ steps.meta.outputs.image_tag }}
+          sed -i "s|\${IMAGE_TAG}|$GIT_SHA|g" app/k8s/deployment.yaml
+
+      - name: Deploy app to k3s
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          echo "$KUBE_CONFIG" | base64 -d > kubeconfig
           chmod 600 kubeconfig
           export KUBECONFIG=kubeconfig
           kubectl apply -f app/k8s/namespace.yaml
@@ -59,67 +83,40 @@ jobs:
           kubectl apply -f app/k8s/ingress.yaml
           kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
           kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
-          kubectl rollout status -n app-test deploy/demo-app --timeout=180s
 
-      - name: Install local scanners
+      - name: Verify deployment
         run: |
-          mkdir -p $HOME/.local/bin
-          export PATH=$HOME/.local/bin:$PATH
-          source venv/bin/activate
-          pip install semgrep checkov jinja2 sentence-transformers joblib scikit-learn lightgbm openai pyyaml
-          deactivate
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
-          curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
-          curl -L https://github.com/zaproxy/zaproxy/releases/latest/download/ZAP_Linux.tar.gz | tar -xzf - -C $HOME/.local/bin zap
-          export PATH=$HOME/.local/bin:$PATH
+          export KUBECONFIG=kubeconfig
+          kubectl rollout status -n app-test deploy/demo-app --timeout=300s
 
-      - name: Verify scanner installation
-        run: |
-          export PATH=$HOME/.local/bin:$PATH
-          semgrep --version
-          checkov --version
-          trivy --version
-          syft --version
-          conftest version || true
-          gitleaks version
-          zap.sh -version
-
-      - name: Run SAST scan
-        run: |
-          source venv/bin/activate
-          semgrep --config scanners/semgrep_rules.yml --json > sast.json || true
-          deactivate
-
-      - name: Run Secrets scan
-        run: |
-          gitleaks detect --source . --report-path secrets.json || true
-
-      - name: Run IaC scan
-        run: |
-          source venv/bin/activate
-          if [ -d app/k8s ] && [ "$(ls -A app/k8s)" ]; then
-            checkov -d app/k8s --output json -f scanners/checkov.yml > iac.json || true
-          else
-            echo "[]" > iac.json
-          fi
-          deactivate
-
-      - name: Run SCA scan
-        run: |
-          trivy fs --format json --output sca.json . || true
-
-      - name: Generate SBOM
-        run: |
-          syft dir:app -o json > sbom.json
-
+      # === SCANS ===
       - name: DAST scan with OWASP ZAP
         run: |
           source venv/bin/activate
-          TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}')
-          zap.sh -cmd -quickurl http://$TARGET_HOST -quickout zap.json -configfile scanners/zap_config.yml || true
+          TARGET_HOST=http://$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' || echo "localhost")
+          zap -cmd -quickurl $TARGET_HOST -quickout zap.json -configfile scanners/zap_config.yml || true
           deactivate
+
+      - name: SAST scan
+        run: |
+          source venv/bin/activate
+          semgrep scan app --config scanners/semgrep_rules.yml --json > sast.json || true
+          deactivate
+
+      - name: Secrets scan
+        run: gitleaks detect --source . --report-path secrets.json || true
+
+      - name: IaC scan
+        run: |
+          source venv/bin/activate
+          checkov -d app/k8s -f scanners/checkov.yml --output json > iac.json || true
+          deactivate
+
+      - name: SCA scan
+        run: trivy fs --format json --output sca.json . || true
+
+      - name: Generate SBOM
+        run: syft dir:app -o json > sbom.json
 
       - name: Merge findings
         run: |
@@ -133,7 +130,7 @@ jobs:
             --out findings.jsonl
           deactivate
 
-      - name: AI inference + HTML report
+      - name: Run inference
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
@@ -157,7 +154,7 @@ jobs:
         run: |
           THRESH=${{ steps.gate.outputs.threshold }}
           VIOL=$(python3 - << 'PY'
-          import json,sys,os
+          import json,os
           thr=float(os.environ["THR"])
           bad=0
           for l in open("enriched.jsonl"):
@@ -167,16 +164,15 @@ jobs:
           PY
           )
           echo "Findings >= threshold: $VIOL"
-          if [ "$VIOL" -gt 0 ]; then exit 1
-          fi
+          if [ "$VIOL" -gt 0 ]; then exit 1; fi
         env:
           THR: ${{ steps.gate.outputs.threshold }}
 
-      - name: Run Red Team tests
+      - name: Red team
         run: |
           source venv/bin/activate
-          TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}')
-          python3 redteam/run_attacks.py --target http://$TARGET_HOST --out redteam_results.json
+          TARGET_HOST=http://$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' || echo "localhost")
+          python3 redteam/run_attacks.py --target $TARGET_HOST --out redteam_results.json
           deactivate
 
       - name: Upload artifacts
