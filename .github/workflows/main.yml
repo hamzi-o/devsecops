@@ -91,14 +91,14 @@ jobs:
           echo "$KUBE_CONFIG" | base64 -d > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
 
-          kubectl config view --minify
-          kubectl cluster-info
+          # Ensure namespace exists
+          kubectl apply -f app/k8s/namespace.yaml
+          kubectl wait --for=condition=Established --timeout=30s namespace/app-test
 
           sed -i "s|\${IMAGE_TAG}|${{ github.sha }}|g" app/k8s/deployment.yaml
-          kubectl apply -f app/k8s/namespace.yaml
-          kubectl apply -f app/k8s/deployment.yaml
-          kubectl apply -f app/k8s/service.yaml
-          kubectl apply -f app/k8s/ingress.yaml
+          kubectl apply -f app/k8s/deployment.yaml -n app-test
+          kubectl apply -f app/k8s/service.yaml -n app-test
+          kubectl apply -f app/k8s/ingress.yaml -n app-test
           kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
           kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
 
@@ -111,7 +111,7 @@ jobs:
           echo "$KUBE_CONFIG" | base64 -d > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
 
-          kubectl wait --for=condition=available --timeout=300s deployment/devsecops-app -n devsecops
+          kubectl wait --for=condition=available --timeout=300s deployment/devsecops-app -n app-test
           sleep 30s
 
       - name: Get STAGING_HOST
@@ -124,7 +124,7 @@ jobs:
           echo "$KUBE_CONFIG" | base64 -d > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
 
-          STAGING_HOST=$(kubectl get ingress -n devsecops -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' || kubectl get ingress -n devsecops -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' || echo "")
+          STAGING_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' || kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' || echo "")
           if [ -z "$STAGING_HOST" ]; then
             echo "STAGING_HOST not found, using vars.STAGING_HOST"
           else
