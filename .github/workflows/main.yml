@@ -29,25 +29,35 @@ jobs:
           pip list
           deactivate
 
-      - name: Install scanners
+      - name: Install scanners locally
         run: |
-          # Install Trivy with sudo
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin v0.64.1
-          
-          # Install other scanners with sudo
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | sudo tar -xz -C /usr/local/bin gitleaks
-          curl -L https://github.com/open-policy-agent/conftest/releases/download/v0.60.0/conftest_0.60.0_Linux_x86_64.tar.gz | sudo tar -xz -C /usr/local/bin conftest
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin v1.12.2
+          mkdir -p $HOME/.local/bin
+          export PATH=$HOME/.local/bin:$PATH
 
-      - name: Verify scanner installation
+          # Trivy
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin v0.64.1
+          
+          # Gitleaks
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xz -C $HOME/.local/bin gitleaks
+          
+          # Conftest
+          curl -L https://github.com/open-policy-agent/conftest/releases/download/v0.60.0/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xz -C $HOME/.local/bin conftest
+          
+          # Syft
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin v1.12.2
+          
+          # Verify binaries
+          trivy --version
+          gitleaks version
+          conftest version
+          syft --version
+
+      - name: Verify Python scanners
         run: |
           source venv/bin/activate
           semgrep --version || { echo "Semgrep installation failed"; exit 1; }
           checkov --version || { echo "Checkov installation failed"; exit 1; }
           deactivate
-          gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
-          trivy --version || { echo "Trivy installation failed"; exit 1; }
-          syft --version || { echo "Syft installation failed"; exit 1; }
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -72,7 +82,7 @@ jobs:
           push: true
           tags: ${{ secrets.REGISTRY }}/app:${{ github.sha }}
 
-      - name: Deploy
+      - name: Deploy Kubernetes resources
         env:
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
         if: github.event_name == 'push'
@@ -157,6 +167,7 @@ jobs:
       - name: Merge findings
         run: |
           source venv/bin/activate
+          export PATH=$HOME/.local/bin:$PATH
           python3 risk_model/inference/merge_findings.py \
             --sast sast.json \
             --secrets secrets.json \
