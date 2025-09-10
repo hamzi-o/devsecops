@@ -105,7 +105,7 @@ jobs:
       - name: Wait for deployment ready
         run: |
           export KUBECONFIG=$HOME/.kube/config
-          kubectl wait --for=condition=available --timeout=300s deployment/devsecops-app -n app-test
+          kubectl wait --for=condition=available --timeout=300s deployment/demo-app -n app-test
 
       # ----------------------------
       # Get STAGING_HOST
