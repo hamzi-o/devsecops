@@ -13,6 +13,8 @@ spec:
       labels:
         app: demo-app
     spec:
+      imagePullSecrets:
+        - name: ghcr-secret
       containers:
         - name: app
           image: ghcr.io/hamzi-o/devsecops/app:${IMAGE_TAG}
