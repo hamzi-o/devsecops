@@ -6,13 +6,11 @@ on:
     branches: ["main"]
 
 jobs:
-  build-and-scan:
+  build-deploy-scan:
     runs-on: self-hosted
-    outputs:
-      IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
-      ADAPTIVE_THRESHOLD: ${{ steps.gate.outputs.threshold }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Cache Python dependencies
         uses: actions/cache@v4
@@ -25,38 +23,23 @@ jobs:
           python3 -m venv venv
           source venv/bin/activate
           pip install --upgrade pip
-          pip install -r requirements.txt  # no pinned urllib3 or semgrep
+          pip install -r requirements.txt
           deactivate
-
-      - name: Install scanners locally
-        run: |
-          source venv/bin/activate
-          pip install semgrep checkov jinja2 sentence-transformers joblib scikit-learn lightgbm openai pyyaml
-          deactivate
-          mkdir -p $HOME/.local/bin
-          export PATH=$HOME/.local/bin:$PATH
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xz -C $HOME/.local/bin gitleaks
-          curl -L https://github.com/open-policy-agent/conftest/releases/download/v0.60.0/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xz -C $HOME/.local/bin conftest
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
-          curl -sSL https://github.com/zaproxy/zaproxy/releases/download/v2.17.0/ZAP_2_17_0_Linux.tar.gz | tar -xz -C $HOME/.local/bin zap
-
-      - name: Verify scanners
-        run: |
-          source venv/bin/activate
-          semgrep --version || exit 1
-          checkov --version || exit 1
-          deactivate
-          $HOME/.local/bin/trivy --version || exit 1
-          $HOME/.local/bin/syft --version || exit 1
-          $HOME/.local/bin/gitleaks version || exit 1
-          $HOME/.local/bin/conftest version || exit 1
-          $HOME/.local/bin/zap -version || exit 1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build & push image
+      - name: Bootstrap builder
+        run: docker buildx inspect --bootstrap
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY }}
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Build & push Docker image
         id: meta
         run: |
           GIT_SHA=$(git rev-parse --short HEAD)
@@ -65,7 +48,7 @@ jobs:
           docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
           docker push ${{ secrets.REGISTRY }}/app:latest
 
-      - name: Deploy to k3s
+      - name: Deploy app to k3s
         run: |
           echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
           chmod 600 kubeconfig
@@ -76,14 +59,32 @@ jobs:
           kubectl apply -f app/k8s/ingress.yaml
           kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
           kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
-          kubectl rollout status -n app-test deploy/demo-app --timeout=120s
+          kubectl rollout status -n app-test deploy/demo-app --timeout=180s
 
-      - name: Run DAST scan with OWASP ZAP
+      - name: Install local scanners
         run: |
+          mkdir -p $HOME/.local/bin
+          export PATH=$HOME/.local/bin:$PATH
           source venv/bin/activate
-          TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}')
-          $HOME/.local/bin/zap -cmd -quickurl http://$TARGET_HOST -quickout zap.json || true
+          pip install semgrep checkov jinja2 sentence-transformers joblib scikit-learn lightgbm openai pyyaml
           deactivate
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
+          curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
+          curl -L https://github.com/zaproxy/zaproxy/releases/latest/download/ZAP_Linux.tar.gz | tar -xzf - -C $HOME/.local/bin zap
+          export PATH=$HOME/.local/bin:$PATH
+
+      - name: Verify scanner installation
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          semgrep --version
+          checkov --version
+          trivy --version
+          syft --version
+          conftest version || true
+          gitleaks version
+          zap.sh -version
 
       - name: Run SAST scan
         run: |
@@ -92,7 +93,8 @@ jobs:
           deactivate
 
       - name: Run Secrets scan
-        run: gitleaks detect --source=. --report-path secrets.json || true
+        run: |
+          gitleaks detect --source . --report-path secrets.json || true
 
       - name: Run IaC scan
         run: |
@@ -105,10 +107,19 @@ jobs:
           deactivate
 
       - name: Run SCA scan
-        run: trivy fs --format json --output sca.json . || true
+        run: |
+          trivy fs --format json --output sca.json . || true
 
       - name: Generate SBOM
-        run: syft dir:app -o json > sbom.json
+        run: |
+          syft dir:app -o json > sbom.json
+
+      - name: DAST scan with OWASP ZAP
+        run: |
+          source venv/bin/activate
+          TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}')
+          zap.sh -cmd -quickurl http://$TARGET_HOST -quickout zap.json -configfile scanners/zap_config.yml || true
+          deactivate
 
       - name: Merge findings
         run: |
@@ -122,7 +133,7 @@ jobs:
             --out findings.jsonl
           deactivate
 
-      - name: Run AI inference and generate report
+      - name: AI inference + HTML report
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
@@ -142,7 +153,7 @@ jobs:
           echo "threshold=$(jq -r .adaptive_threshold gate.json)" >> $GITHUB_OUTPUT
           deactivate
 
-      - name: Enforce adaptive gate
+      - name: Check gate
         run: |
           THRESH=${{ steps.gate.outputs.threshold }}
           VIOL=$(python3 - << 'PY'
@@ -161,18 +172,25 @@ jobs:
         env:
           THR: ${{ steps.gate.outputs.threshold }}
 
+      - name: Run Red Team tests
+        run: |
+          source venv/bin/activate
+          TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}')
+          python3 redteam/run_attacks.py --target http://$TARGET_HOST --out redteam_results.json
+          deactivate
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: scans-and-report
+          name: security-report
           path: |
+            report.html
+            findings.jsonl
+            enriched.jsonl
+            redteam_results.json
+            zap.json
             sast.json
             secrets.json
             iac.json
             sca.json
             sbom.json
-            zap.json
-            findings.jsonl
-            enriched.jsonl
-            report.html
-            gate.json
