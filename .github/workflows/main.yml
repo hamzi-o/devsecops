@@ -50,6 +50,24 @@ jobs:
           # Replace IMAGE_TAG in deployment manifest
           sed -i "s|\${IMAGE_TAG}|$GIT_SHA|g" app/k8s/deployment.yaml
 
+      - name: Verify image exists
+        run: |
+          export KUBECONFIG=kubeconfig
+          GIT_SHA=$(git rev-parse --short HEAD)
+          
+          echo "=== Verifying image exists ==="
+          echo "Checking if image exists: ${{ secrets.REGISTRY }}/app:$GIT_SHA"
+          
+          # Try to pull the image we just pushed
+          if docker pull ${{ secrets.REGISTRY }}/app:$GIT_SHA; then
+            echo "✅ Image exists and can be pulled"
+          else
+            echo "❌ Image cannot be pulled - this is the problem!"
+            echo "Available tags in registry:"
+            docker run --rm quay.io/skopeo/skopeo:latest list-tags docker://${{ secrets.REGISTRY }}/app || echo "Could not list tags"
+            exit 1
+          fi
+
       - name: Deploy app to k3s
         run: |
           echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
