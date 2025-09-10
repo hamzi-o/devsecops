@@ -49,7 +49,6 @@ jobs:
           # Verify binaries
           trivy --version
           gitleaks version
-          conftest version
           syft --version
 
       - name: Verify Python scanners
