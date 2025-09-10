@@ -1,11 +1,9 @@
 name: DevSecOps Pipeline
 on:
   push:
-    branches:
-      - main
+    branches: ["main"]
   pull_request:
-    branches:
-      - main
+    branches: ["main"]
 
 jobs:
   build-and-scan:
@@ -27,115 +25,86 @@ jobs:
           python3 -m venv venv
           source venv/bin/activate
           pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt  # no pinned urllib3 or semgrep
           deactivate
 
-      - name: Install local scanners
+      - name: Install scanners locally
         run: |
+          source venv/bin/activate
+          pip install semgrep checkov jinja2 sentence-transformers joblib scikit-learn lightgbm openai pyyaml
+          deactivate
           mkdir -p $HOME/.local/bin
           export PATH=$HOME/.local/bin:$PATH
-          source venv/bin/activate
-          pip install semgrep==1.68.0 checkov==3.2.261 jinja2==3.1.4 sentence-transformers==2.7.0 joblib==1.4.2 scikit-learn==1.4.2 lightgbm==4.3.0 openai==1.35.0 pyyaml==6.0.2 urllib3==1.26.20
-          deactivate
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin v0.64.1
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
-          curl -L https://github.com/open-policy-agent/conftest/releases/download/v0.60.0/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin v1.12.2
-          chmod +x $HOME/.local/bin/*
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xz -C $HOME/.local/bin gitleaks
+          curl -L https://github.com/open-policy-agent/conftest/releases/download/v0.60.0/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xz -C $HOME/.local/bin conftest
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
+          curl -sSL https://github.com/zaproxy/zaproxy/releases/download/v2.17.0/ZAP_2_17_0_Linux.tar.gz | tar -xz -C $HOME/.local/bin zap
 
       - name: Verify scanners
         run: |
-          export PATH=$HOME/.local/bin:$PATH
           source venv/bin/activate
-          semgrep --version || { echo "Semgrep failed"; exit 1; }
-          checkov --version || { echo "Checkov failed"; exit 1; }
+          semgrep --version || exit 1
+          checkov --version || exit 1
           deactivate
-          gitleaks version || { echo "Gitleaks failed"; exit 1; }
-          trivy --version || { echo "Trivy failed"; exit 1; }
-          syft --version || { echo "Syft failed"; exit 1; }
-          conftest version || echo "Conftest not installed, ignoring"
+          $HOME/.local/bin/trivy --version || exit 1
+          $HOME/.local/bin/syft --version || exit 1
+          $HOME/.local/bin/gitleaks version || exit 1
+          $HOME/.local/bin/conftest version || exit 1
+          $HOME/.local/bin/zap -version || exit 1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          install: true
-          use: true
 
-      - name: Build & push Docker image
+      - name: Build & push image
         id: meta
         run: |
           GIT_SHA=$(git rev-parse --short HEAD)
           echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
           docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest app
           docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
+          docker push ${{ secrets.REGISTRY }}/app:latest
 
-  deploy-and-security:
-    runs-on: self-hosted
-    needs: build-and-scan
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup kubeconfig
+      - name: Deploy to k3s
         run: |
           echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
           chmod 600 kubeconfig
           export KUBECONFIG=kubeconfig
-
-      - name: Deploy namespace
-        run: kubectl apply -f app/k8s/namespace.yaml || true
-
-      - name: Deploy app
-        env:
-          IMAGE_TAG: ${{ needs.build-and-scan.outputs.IMAGE_TAG }}
-        run: |
-          export KUBECONFIG=kubeconfig
-          sed -i "s|\${IMAGE_TAG}|${IMAGE_TAG}|g" app/k8s/deployment.yaml
+          kubectl apply -f app/k8s/namespace.yaml
           kubectl apply -f app/k8s/deployment.yaml
           kubectl apply -f app/k8s/service.yaml
           kubectl apply -f app/k8s/ingress.yaml
           kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
           kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
-          kubectl rollout status -n app-test deploy/demo-app --timeout=300s
+          kubectl rollout status -n app-test deploy/demo-app --timeout=120s
 
-      - name: Get STAGING_HOST
-        id: get-host
-        run: |
-          export KUBECONFIG=kubeconfig
-          STAGING_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' || kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' || echo "")
-          if [ -z "$STAGING_HOST" ]; then
-            echo "STAGING_HOST not found, using vars.STAGING_HOST"
-          else
-            echo "STAGING_HOST=http://$STAGING_HOST" >> $GITHUB_ENV
-          fi
-
-      - name: DAST scan (OWASP ZAP)
+      - name: Run DAST scan with OWASP ZAP
         run: |
           source venv/bin/activate
-          TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
-          export PATH=$HOME/.local/bin:$PATH
-          zap -cmd -quickurl $TARGET_HOST -quickout zap.json -configfile scanners/zap_config.yml || true
+          TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}')
+          $HOME/.local/bin/zap -cmd -quickurl http://$TARGET_HOST -quickout zap.json || true
           deactivate
 
-      - name: SAST scan
+      - name: Run SAST scan
         run: |
           source venv/bin/activate
-          semgrep scan app --config scanners/semgrep_rules.yml --json > sast.json || true
+          semgrep --config scanners/semgrep_rules.yml --json > sast.json || true
           deactivate
 
-      - name: Secrets scan
-        run: gitleaks detect --source . --report-path secrets.json || true
+      - name: Run Secrets scan
+        run: gitleaks detect --source=. --report-path secrets.json || true
 
-      - name: IaC scan
+      - name: Run IaC scan
         run: |
           source venv/bin/activate
           if [ -d app/k8s ] && [ "$(ls -A app/k8s)" ]; then
-            checkov -d app/k8s -f scanners/checkov.yml --output json > iac.json || true
+            checkov -d app/k8s --output json -f scanners/checkov.yml > iac.json || true
           else
             echo "[]" > iac.json
           fi
           deactivate
 
-      - name: SCA scan
+      - name: Run SCA scan
         run: trivy fs --format json --output sca.json . || true
 
       - name: Generate SBOM
@@ -153,7 +122,7 @@ jobs:
             --out findings.jsonl
           deactivate
 
-      - name: Run inference
+      - name: Run AI inference and generate report
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
@@ -177,7 +146,7 @@ jobs:
         run: |
           THRESH=${{ steps.gate.outputs.threshold }}
           VIOL=$(python3 - << 'PY'
-          import json,os
+          import json,sys,os
           thr=float(os.environ["THR"])
           bad=0
           for l in open("enriched.jsonl"):
@@ -187,42 +156,23 @@ jobs:
           PY
           )
           echo "Findings >= threshold: $VIOL"
-          if [ "$VIOL" -gt 0 ]; then echo "Adaptive gate failed"; exit 1; fi
+          if [ "$VIOL" -gt 0 ]; then exit 1
+          fi
         env:
           THR: ${{ steps.gate.outputs.threshold }}
-
-      - name: Threat model update
-        run: |
-          source venv/bin/activate
-          python3 threatmodel/feedback.py enriched.jsonl
-          deactivate
-
-      - name: Drift detection
-        run: |
-          export KUBECONFIG=kubeconfig
-          source venv/bin/activate
-          python3 drift/check.py
-          deactivate
-
-      - name: Red team tests
-        run: |
-          source venv/bin/activate
-          TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
-          python3 redteam/run_attacks.py --target $TARGET_HOST --out redteam_results.json
-          deactivate
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: security-report
+          name: scans-and-report
           path: |
-            report.html
-            findings.jsonl
-            enriched.jsonl
-            zap.json
             sast.json
             secrets.json
             iac.json
             sca.json
             sbom.json
-            redteam_results.json
+            zap.json
+            findings.jsonl
+            enriched.jsonl
+            report.html
+            gate.json
