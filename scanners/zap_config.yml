@@ -1,0 +1,9 @@
+spider:
+  maxDepth: 5
+  maxChildren: 0
+scanner:
+  activeScan: true
+  threadsPerHost: 2
+report:
+  format: json
+  file: zap.json
