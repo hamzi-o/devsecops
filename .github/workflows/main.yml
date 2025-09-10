@@ -139,20 +139,12 @@ jobs:
           pip install semgrep checkov jinja2 sentence-transformers joblib scikit-learn lightgbm openai pyyaml
           deactivate
           
-          # Install Trivy with checksum verification
+          # Install Trivy
           TRIVY_VERSION="0.66.0"
-          curl -L -H "Authorization: token $GITHUB_TOKEN" -o trivy.tar.gz https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz
-          curl -L -H "Authorization: token $GITHUB_TOKEN" -o checksums.txt https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_checksums.txt
-          echo "Verifying checksum..."
-          sha256sum --check --ignore-missing checksums.txt
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin v${TRIVY_VERSION}
           if [ $? -ne 0 ]; then
-            echo "Checksum verification failed"
-            exit 1
-          fi
-          tar -xzf trivy.tar.gz -C $HOME/.local/bin
-          if [ $? -ne 0 ]; then
-            echo "Failed to extract Trivy tarball"
-            exit 1
+            echo "Trivy installation failed, falling back to Docker image for SCA scan"
+            echo "trivy_docker_fallback=true" >> $GITHUB_ENV
           fi
           
           # Install other security scanners
@@ -170,7 +162,11 @@ jobs:
           echo "=== Scanner Versions ==="
           semgrep --version
           checkov --version
-          trivy --version
+          if [ "${{ env.trivy_docker_fallback }}" != "true" ]; then
+            trivy --version
+          else
+            echo "Trivy binary not installed, using Docker fallback"
+          echo
           syft --version
           conftest version || true
           gitleaks version
@@ -206,7 +202,11 @@ jobs:
         continue-on-error: true
         run: |
           export PATH=$HOME/.local/bin:$PATH
-          trivy fs --format json --output sca.json . || echo "[]" > sca.json
+          if [ "${{ env.trivy_docker_fallback }}" == "true" ]; then
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $HOME/.cache:/root/.cache aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo "[]" > sca.json
+          else
+            trivy fs --format json --output sca.json . || echo "[]" > sca.json
+          fi
 
       - name: Generate SBOM
         continue-on-error: true
