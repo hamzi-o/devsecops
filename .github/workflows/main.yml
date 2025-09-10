@@ -28,8 +28,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login GHCR
-        if: ${{ secrets.GHCR_TOKEN != '' }}
-        run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+        run: |
+          if [ -n "${{ secrets.GHCR_TOKEN }}" ]; then
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+          else
+            echo "GHCR_TOKEN not set, skipping login"
+          fi
       - name: Build & push image
         id: meta
         run: |
@@ -122,6 +126,7 @@ jobs:
             report.html
             thr.json
             metrics.json
+
   deploy:
     runs-on: self-hosted
     needs: build-and-scan
