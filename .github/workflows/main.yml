@@ -139,15 +139,7 @@ jobs:
           pip install semgrep checkov jinja2 sentence-transformers joblib scikit-learn lightgbm openai pyyaml
           deactivate
           
-          # Install Trivy
-          TRIVY_VERSION="0.66.0"
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin v${TRIVY_VERSION}
-          if [ $? -ne 0 ]; then
-            echo "Trivy installation failed, falling back to Docker image for SCA scan"
-            echo "trivy_docker_fallback=true" >> $GITHUB_ENV
-          fi
-          
-          # Install other security scanners
+          # Install security scanners (excluding Trivy binary)
           curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
           curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
@@ -162,11 +154,7 @@ jobs:
           echo "=== Scanner Versions ==="
           semgrep --version
           checkov --version
-          if [ "${{ env.trivy_docker_fallback }}" != "true" ]; then
-            trivy --version
-          else
-            echo "Trivy binary not installed, using Docker fallback"
-          echo
+          echo "Trivy binary not installed, using Docker image for SCA scan"
           syft --version
           conftest version || true
           gitleaks version
@@ -201,12 +189,7 @@ jobs:
       - name: Run SCA scan
         continue-on-error: true
         run: |
-          export PATH=$HOME/.local/bin:$PATH
-          if [ "${{ env.trivy_docker_fallback }}" == "true" ]; then
-            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $HOME/.cache:/root/.cache aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo "[]" > sca.json
-          else
-            trivy fs --format json --output sca.json . || echo "[]" > sca.json
-          fi
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $HOME/.cache:/root/.cache aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo "[]" > sca.json
 
       - name: Generate SBOM
         continue-on-error: true
@@ -305,7 +288,7 @@ jobs:
                           risk_score = finding.get('risk_score', 0)
                           if risk_score >= threshold:
                               violations += 1
-                              print(f'High-risk finding: {finding.get(\"title\", \"Unknown\")} (score: {risk_score})', file=sys.stderr)
+                              print(f'High-risk finding: {finding.get(\"title\", \"Unknown\")} wokół: {risk_score})', file=sys.stderr)
           except FileNotFoundError:
               print('No enriched findings file found', file=sys.stderr)
           except Exception as e:
