@@ -23,6 +23,7 @@ jobs:
           source venv/bin/activate
           pip install --upgrade pip
           pip install -r requirements.txt
+          pip install owasp-zap==0.0.17
           pip list
           deactivate
       - name: Install scanners
@@ -35,12 +36,10 @@ jobs:
         run: |
           source venv/bin/activate
           semgrep --version || { echo "Semgrep installation failed"; exit 1; }
-          deactivate
-          gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
-          source venv/bin/activate
           checkov --version || { echo "Checkov installation failed"; exit 1; }
           zap --version || { echo "OWASP ZAP installation failed"; exit 1; }
           deactivate
+          gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
           trivy --version || { echo "Trivy installation failed"; exit 1; }
           syft --version || { echo "Syft installation failed"; exit 1; }
       - name: Set up Docker Buildx
