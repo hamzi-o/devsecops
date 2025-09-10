@@ -75,12 +75,12 @@ jobs:
 
       - name: Verify model
         run: |
-          echo "${{ secrets.MODEL_CHECKPOINT_SHA256 }} risk_model/artifacts/vuln_prioritizer_checkpoint.pt" > model.sha256
+          echo "${{ secrets.MODEL_CHECKPOINT_SHA256 }} artifacts/vuln_prioritizer_checkpoint.pt" > model.sha256
           sha256sum -c model.sha256
 
       - name: Check model artifacts
         run: |
-          ls risk_model/artifacts/scaler.pkl risk_model/artifacts/best_params.pkl risk_model/artifacts/vuln_prioritizer_checkpoint.pt || exit 1
+          ls artifacts/scaler.pkl artifacts/best_params.pkl artifacts/vuln_prioritizer_checkpoint.pt || exit 1
 
       # ------------------- K8s Deployment -------------------
       - name: Setup kubeconfig
