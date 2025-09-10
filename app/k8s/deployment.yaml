@@ -22,14 +22,14 @@ spec:
             - containerPort: 8080
           livenessProbe:
             httpGet:
-              path: /
+              path: /healthz  # Changed from / to /healthz
               port: 8080
             initialDelaySeconds: 30
             timeoutSeconds: 5
             periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /
+              path: /healthz  # Changed from / to /healthz
               port: 8080
             initialDelaySeconds: 15
             timeoutSeconds: 3
