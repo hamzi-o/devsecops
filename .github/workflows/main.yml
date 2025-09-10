@@ -31,10 +31,13 @@ jobs:
 
       - name: Install scanners
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.64.1
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xz -C /usr/local/bin gitleaks
-          curl -L https://github.com/open-policy-agent/conftest/releases/download/v0.60.0/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xz -C /usr/local/bin conftest
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v1.12.2
+          # Install Trivy with sudo
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin v0.64.1
+          
+          # Install other scanners with sudo
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | sudo tar -xz -C /usr/local/bin gitleaks
+          curl -L https://github.com/open-policy-agent/conftest/releases/download/v0.60.0/conftest_0.60.0_Linux_x86_64.tar.gz | sudo tar -xz -C /usr/local/bin conftest
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin v1.12.2
 
       - name: Verify scanner installation
         run: |
@@ -62,7 +65,7 @@ jobs:
           username: ${{ secrets.GHCR_USERNAME }}
           password: ${{ secrets.GHCR_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: app
@@ -141,7 +144,6 @@ jobs:
           if [ -d app/k8s ] && [ "$(ls -A app/k8s)" ]; then
             checkov -d app/k8s -f scanners/checkov.yml --output json > iac.json || true
           else
-            echo "No valid IaC files found in app/k8s, skipping checkov scan"
             echo "[]" > iac.json
           fi
           deactivate
