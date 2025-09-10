@@ -1,15 +1,17 @@
 name: DevSecOps Pipeline
 on:
-  push: { branches: ["main"] }
-  pull_request: { branches: ["main"] }
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 jobs:
   build-and-scan:
     runs-on: self-hosted
-    outputs:
-      IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
-      ADAPTIVE_THRESHOLD: ${{ steps.gate.outputs.threshold }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Cache Python dependencies
         uses: actions/cache@v4
         with:
@@ -23,23 +25,6 @@ jobs:
           pip install -r requirements.txt
           pip list
           deactivate
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login GHCR
-        run: |
-          if [ -n "${{ secrets.GHCR_TOKEN }}" ]; then
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
-          else
-            echo "GHCR_TOKEN not set, skipping login"
-          fi
-      - name: Build & push image
-        id: meta
-        run: |
-          GIT_SHA=$(git rev-parse --short HEAD)
-          echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
-          docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest app
-          docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
-          docker push ${{ secrets.REGISTRY }}/app:latest
       - name: Install scanners
         run: |
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.64.1
@@ -48,65 +33,118 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v1.12.2
       - name: Verify scanner installation
         run: |
+          source venv/bin/activate
           semgrep --version || { echo "Semgrep installation failed"; exit 1; }
+          deactivate
           gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
+          source venv/bin/activate
           checkov --version || { echo "Checkov installation failed"; exit 1; }
+          zap --version || { echo "OWASP ZAP installation failed"; exit 1; }
+          deactivate
           trivy --version || { echo "Trivy installation failed"; exit 1; }
           syft --version || { echo "Syft installation failed"; exit 1; }
-          zap --version || { echo "OWASP ZAP installation failed"; exit 1; }
-  deploy-and-scan:
-    runs-on: self-hosted
-    needs: build-and-scan
-    outputs:
-      IMAGE_TAG: ${{ needs.build-and-scan.outputs.IMAGE_TAG }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup kubeconfig
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+          use: true
+      - name: Bootstrap builder
+        run: docker buildx inspect --bootstrap
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY }}
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: app
+          push: true
+          tags: ${{ secrets.REGISTRY }}/app:${{ github.sha }}
+      - name: Verify model
         run: |
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
+          echo "${{ secrets.MODEL_CHECKPOINT_SHA256 }} risk_model/artifacts/vuln_prioritizer_checkpoint.pt" > model.sha256
+          sha256sum -c model.sha256
+      - name: Check model artifacts
+        run: |
+          ls risk_model/artifacts/scaler.pkl risk_model/artifacts/best_params.pkl risk_model/artifacts/vuln_prioritizer_checkpoint.pt || exit 1
+      - name: Deploy
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        if: github.event_name == 'push'
+        run: |
+          echo "$KUBE_CONFIG" | base64 -d > kubeconfig
           chmod 600 kubeconfig
-      - name: Verify k3s connectivity
-        run: |
           export KUBECONFIG=kubeconfig
-          kubectl cluster-info || { echo "k3s connectivity failed"; exit 1; }
-          kubectl get nodes || { echo "Failed to get nodes"; exit 1; }
-      - name: Deploy to k3s
-        run: |
-          export KUBECONFIG=kubeconfig
+          sed -i "s|\${IMAGE_TAG}|${{ github.sha }}|g" app/k8s/deployment.yaml
           kubectl apply -f app/k8s/namespace.yaml
           kubectl apply -f app/k8s/deployment.yaml
           kubectl apply -f app/k8s/service.yaml
           kubectl apply -f app/k8s/ingress.yaml
           kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
           kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
-        env:
-          IMAGE_TAG: ${{ needs.build-and-scan.outputs.IMAGE_TAG }}
-      - name: Verify deployment
+      - name: Verify k3s connectivity
+        if: github.event_name == 'push'
         run: |
           export KUBECONFIG=kubeconfig
-          kubectl rollout status -n app-test deploy/demo-app --timeout=60s
-      - name: Run OWASP ZAP
+          kubectl cluster-info || { echo "k3s connectivity failed"; exit 1; }
+          kubectl get nodes || { echo "Failed to get nodes"; exit 1; }
+      - name: Wait for deployment
+        if: github.event_name == 'push'
+        run: |
+          export KUBECONFIG=kubeconfig
+          kubectl wait --for=condition=available --timeout=300s deployment/devsecops-app -n devsecops
+          sleep 30
+      - name: Get STAGING_HOST
+        id: get-host
+        if: github.event_name == 'push'
+        run: |
+          export KUBECONFIG=kubeconfig
+          STAGING_HOST=$(kubectl get ingress -n devsecops -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' || kubectl get ingress -n devsecops -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' || echo "")
+          if [ -z "$STAGING_HOST" ]; then
+            echo "STAGING_HOST not found, using vars.STAGING_HOST"
+          else
+            echo "STAGING_HOST=http://$STAGING_HOST" >> $GITHUB_ENV
+          fi
+      - name: Validate STAGING_HOST
+        if: github.event_name == 'push'
+        run: |
+          TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
+          if [ -z "$TARGET_HOST" ]; then
+            echo "Error: STAGING_HOST is not set"
+            exit 1
+          fi
+          curl -I $TARGET_HOST || echo "Warning: Failed to reach $TARGET_HOST"
+      - name: DAST scan with OWASP ZAP
+        if: github.event_name == 'push' && (env.STAGING_HOST != '' || vars.STAGING_HOST != '')
         run: |
           source venv/bin/activate
-          zap -cmd -quickurl http://${{ vars.STAGING_HOST }} -quickout zap.json -configfile scanners/zap_config.yml || true
+          TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
+          zap -cmd -quickurl $TARGET_HOST -quickout zap.json -configfile scanners/zap_config.yml || true
           deactivate
-      - name: Run Semgrep
+      - name: SAST scan
         run: |
           source venv/bin/activate
-          semgrep --config=scanners/semgrep_rules.yml --json > sast.json || true
+          semgrep scan app --config scanners/semgrep_rules.yml --json > sast.json || true
           deactivate
-      - name: Run Gitleaks
+      - name: Secrets scan
         run: |
-          gitleaks detect --source=. --report-format json --report-path secrets.json || true
-      - name: Run Checkov
+          gitleaks detect --source . --report-path secrets.json || true
+      - name: IaC scan
         run: |
           source venv/bin/activate
-          checkov -d app/k8s --output json -f scanners/checkov.yml > iac.json || true
+          if [ -d app/k8s ] && [ "$(ls -A app/k8s)" ]; then
+            checkov -d app/k8s -f scanners/checkov.yml --output json > iac.json || true
+          else
+            echo "No valid IaC files found in app/k8s, skipping checkov scan"
+            echo "[]" > iac.json
+          fi
           deactivate
-      - name: Run Trivy
+      - name: SCA scan
         run: |
-          trivy image --format json -o sca.json ${{ secrets.REGISTRY }}/app:${{ needs.build-and-scan.outputs.IMAGE_TAG }} || true
-      - name: Run Syft
+          trivy fs --format json --output sca.json . || true
+      - name: Generate SBOM
         run: |
           syft dir:app -o json > sbom.json
       - name: Merge findings
@@ -114,17 +152,13 @@ jobs:
           source venv/bin/activate
           python3 risk_model/inference/merge_findings.py \
             --sast sast.json \
-            --sca sca.json \
-            --iac iac.json \
             --secrets secrets.json \
+            --iac iac.json \
+            --sca sca.json \
             --dast zap.json \
             --out findings.jsonl
           deactivate
-      - name: Download risk model
-        run: |
-          curl -L "${{ secrets.RISK_MODEL_URL }}" -o risk_model/artifacts/vuln_prioritizer_checkpoint.pt
-          echo "${{ secrets.RISK_MODEL_SHA256 }}" | sha256sum -c -
-      - name: AI inference + HTML report
+      - name: Run inference
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
@@ -135,15 +169,14 @@ jobs:
             --out enriched.jsonl \
             --report report.html
           deactivate
-      - name: Adaptive gate threshold
+      - name: Evaluate adaptive gate
         id: gate
         run: |
           source venv/bin/activate
-          python3 adaptive/evaluate_gate.py > thr.json
-          echo "threshold=$(jq -r .adaptive_threshold thr.json)" >> $GITHUB_OUTPUT
-          echo "Adaptive threshold: $(jq -r .adaptive_threshold thr.json)"
+          python3 adaptive/evaluate_gate.py > gate.json
+          echo "threshold=$(jq -r .adaptive_threshold gate.json)" >> $GITHUB_OUTPUT
           deactivate
-      - name: Enforce adaptive gate
+      - name: Check gate
         run: |
           THRESH=${{ steps.gate.outputs.threshold }}
           VIOL=$(python3 - << 'PY'
@@ -160,35 +193,39 @@ jobs:
           if [ "$VIOL" -gt 0 ]; then echo "Adaptive gate failed"; exit 1; fi
         env:
           THR: ${{ steps.gate.outputs.threshold }}
-      - name: Collect and push metrics
+      - name: Update threat model
         run: |
           source venv/bin/activate
-          python3 metrics/collect_metrics.py
-          python3 metrics/prometheus_push.py
+          python3 threatmodel/feedback.py enriched.jsonl
+          deactivate
+      - name: Check drift
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          echo "$KUBE_CONFIG" | base64 -d > kubeconfig
+          export KUBECONFIG=kubeconfig
+          source venv/bin/activate
+          python3 drift/check.py
+          deactivate
+      - name: Red team
+        if: github.event_name == 'push' && (env.STAGING_HOST != '' || vars.STAGING_HOST != '')
+        run: |
+          source venv/bin/activate
+          TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
+          python3 redteam/run_attacks.py --target $TARGET_HOST --out redteam_results.json
           deactivate
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: scans-and-report
+          name: security-report
           path: |
+            report.html
+            findings.jsonl
+            enriched.jsonl
+            redteam_results.json
+            zap.json
             sast.json
             secrets.json
             iac.json
             sca.json
             sbom.json
-            zap.json
-            findings.jsonl
-            enriched.jsonl
-            report.html
-            thr.json
-            metrics.json
-      - name: Red team tests
-        run: |
-          source venv/bin/activate
-          python3 redteam/run_attacks.py --target http://${{ vars.STAGING_HOST }} --out redteam_results.json
-          deactivate
-      - name: Upload red team results
-        uses: actions/upload-artifact@v4
-        with:
-          name: redteam-results
-          path: redteam_results.json
