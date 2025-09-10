@@ -35,7 +35,7 @@ jobs:
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.REGISTRY }}
+          registry: ghcr.io
           username: ${{ secrets.GHCR_USERNAME }}
           password: ${{ secrets.GHCR_TOKEN }}
 
@@ -44,20 +44,20 @@ jobs:
         run: |
           GIT_SHA=$(git rev-parse --short HEAD)
           echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
-          echo "Building image: ${{ secrets.REGISTRY }}/hamzi-o/devsecops/app:$GIT_SHA"
-          docker build -t ${{ secrets.REGISTRY }}/hamzi-o/devsecops/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/hamzi-o/devsecops/app:latest app
+          echo "Building image: ${{ secrets.REGISTRY }}/app:$GIT_SHA"
+          docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest app
           if [ $? -ne 0 ]; then
             echo "Docker build failed"
             exit 1
           fi
-          echo "Pushing image: ${{ secrets.REGISTRY }}/hamzi-o/devsecops/app:$GIT_SHA"
-          docker push ${{ secrets.REGISTRY }}/hamzi-o/devsecops/app:$GIT_SHA
+          echo "Pushing image: ${{ secrets.REGISTRY }}/app:$GIT_SHA"
+          docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
           if [ $? -ne 0 ]; then
             echo "Docker push failed for tag $GIT_SHA"
             exit 1
           fi
-          echo "Pushing image: ${{ secrets.REGISTRY }}/hamzi-o/devsecops/app:latest"
-          docker push ${{ secrets.REGISTRY }}/hamzi-o/devsecops/app:latest
+          echo "Pushing image: ${{ secrets.REGISTRY }}/app:latest"
+          docker push ${{ secrets.REGISTRY }}/app:latest
           if [ $? -ne 0 ]; then
             echo "Docker push failed for tag latest"
             exit 1
@@ -75,9 +75,9 @@ jobs:
           # Apply namespace first
           kubectl apply -f app/k8s/namespace.yaml
           
-          # Create image pull secret for GHCR (if needed)
+          # Create image pull secret for GHCR
           kubectl create secret docker-registry ghcr-secret \
-            --docker-server=${{ secrets.REGISTRY }} \
+            --docker-server=ghcr.io \
             --docker-username=${{ secrets.GHCR_USERNAME }} \
             --docker-password=${{ secrets.GHCR_TOKEN }} \
             --namespace=app-test \
@@ -134,7 +134,7 @@ jobs:
           
           # Install security scanners
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin
-          curl -sSL https://github.com/gitleaks/gileaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
           curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
           curl -L https://github.com/zaproxy/zaproxy/releases/latest/download/ZAP_Linux.tar.gz | tar -xzf - -C $HOME/.local/bin zap
