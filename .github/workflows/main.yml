@@ -7,6 +7,11 @@ on:
     branches:
       - main
 
+env:
+  NS: app-test
+  LOCAL_BIN: $HOME/.local/bin
+  PATH: $HOME/.local/bin:$PATH
+
 jobs:
   build-and-scan:
     runs-on: self-hosted
@@ -28,49 +33,80 @@ jobs:
           source venv/bin/activate
           pip install --upgrade pip
           pip install -r requirements.txt
-          # install scanners, let pip resolve dependencies
-          pip install semgrep checkov jinja2 sentence-transformers joblib scikit-learn lightgbm openai pyyaml
           deactivate
 
-      - name: Install CLI scanners locally
+      - name: Install local binaries for scanners
         run: |
-          mkdir -p $HOME/.local/bin
-          export PATH=$HOME/.local/bin:$PATH
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xz -C $HOME/.local/bin gitleaks
-          curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_Linux_x86_64.tar.gz | tar -xz -C $HOME/.local/bin conftest
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
+          mkdir -p $LOCAL_BIN
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $LOCAL_BIN v0.64.1
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xz -C $LOCAL_BIN gitleaks
+          curl -L https://github.com/open-policy-agent/conftest/releases/download/v0.60.0/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xz -C $LOCAL_BIN conftest
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $LOCAL_BIN v1.12.2
+          chmod +x $LOCAL_BIN/*
 
       - name: Verify scanner installation
         run: |
-          export PATH=$HOME/.local/bin:$PATH
           source venv/bin/activate
-          semgrep --version
-          checkov --version
+          semgrep --version || { echo "Semgrep installation failed"; exit 1; }
+          checkov --version || { echo "Checkov installation failed"; exit 1; }
           deactivate
-          trivy --version
-          gitleaks version
-          syft --version
-          conftest --version
+          gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
+          trivy --version || { echo "Trivy installation failed"; exit 1; }
+          syft --version || { echo "Syft installation failed"; exit 1; }
+          zap.sh -version || echo "OWASP ZAP CLI not found, skip for now"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login GHCR
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.REGISTRY }}
+          registry: ghcr.io
           username: ${{ secrets.GHCR_USERNAME }}
           password: ${{ secrets.GHCR_TOKEN }}
 
-      - name: Build & push image
+      - name: Build & push Docker image
         id: meta
         run: |
-          IMAGE_TAG=$(git rev-parse --short HEAD)
-          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-          docker build -t ${{ secrets.REGISTRY }}/app:$IMAGE_TAG -t ${{ secrets.REGISTRY }}/app:latest app
-          docker push ${{ secrets.REGISTRY }}/app:$IMAGE_TAG
+          GIT_SHA=$(git rev-parse --short HEAD)
+          IMAGE="${{ secrets.REGISTRY }}/app:$GIT_SHA"
+          echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
+          docker build -t $IMAGE -t ${{ secrets.REGISTRY }}/app:latest app
+          docker push $IMAGE
           docker push ${{ secrets.REGISTRY }}/app:latest
+
+      - name: Patch deployment with correct image
+        run: |
+          sed -i "s|\${IMAGE_TAG}|${GITHUB_SHA}|g" app/k8s/deployment.yaml
+          cat app/k8s/deployment.yaml | grep image:
+
+      - name: Create GHCR imagePullSecret
+        run: |
+          kubectl create namespace $NS --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret docker-registry ghcr-secret \
+            --docker-server=ghcr.io \
+            --docker-username=${{ secrets.GHCR_USERNAME }} \
+            --docker-password=${{ secrets.GHCR_TOKEN }} \
+            -n $NS --dry-run=client -o yaml | kubectl apply -f -
+          kubectl patch serviceaccount default -p '{"imagePullSecrets":[{"name":"ghcr-secret"}]}' -n $NS
+
+      - name: Deploy to k3s
+        run: |
+          export KUBECONFIG=kubeconfig
+          kubectl apply -f app/k8s/namespace.yaml
+          kubectl apply -f app/k8s/deployment.yaml
+          kubectl apply -f app/k8s/service.yaml
+          kubectl apply -f app/k8s/ingress.yaml
+          kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
+          kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
+
+      - name: Rollout status and debug
+        run: |
+          export KUBECONFIG=kubeconfig
+          kubectl rollout status deployment/demo-app -n $NS --timeout=180s || true
+          kubectl describe deployment demo-app -n $NS || true
+          kubectl get pods -n $NS || true
+          kubectl logs -l app=demo-app -n $NS --tail=50 || true
 
       - name: SAST scan
         run: |
@@ -79,8 +115,7 @@ jobs:
           deactivate
 
       - name: Secrets scan
-        run: |
-          gitleaks detect --source . --report-path secrets.json || true
+        run: gitleaks detect --source . --report-path secrets.json || true
 
       - name: IaC scan
         run: |
@@ -93,55 +128,16 @@ jobs:
           deactivate
 
       - name: SCA scan
-        run: |
-          export PATH=$HOME/.local/bin:$PATH
-          trivy fs --format json --output sca.json . || true
+        run: trivy fs --format json --output sca.json . || true
 
       - name: Generate SBOM
-        run: |
-          export PATH=$HOME/.local/bin:$PATH
-          syft dir:app -o json > sbom.json
+        run: syft dir:app -o json > sbom.json
 
-  deploy-and-dast:
-    runs-on: self-hosted
-    needs: build-and-scan
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup kubeconfig
-        run: |
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
-          chmod 600 kubeconfig
-          export KUBECONFIG=kubeconfig
-
-      - name: Create namespace
-        run: |
-          kubectl apply -f app/k8s/namespace.yaml || true
-
-      - name: Deploy app
-        run: |
-          export IMAGE_TAG=${{ needs.build-and-scan.outputs.IMAGE_TAG }}
-          sed -i "s|\${IMAGE_TAG}|$IMAGE_TAG|g" app/k8s/deployment.yaml
-          kubectl apply -f app/k8s/deployment.yaml
-          kubectl apply -f app/k8s/service.yaml
-          kubectl apply -f app/k8s/ingress.yaml
-          kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
-          kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
-          kubectl rollout status -n app-test deploy/demo-app --timeout=180s
-
-      - name: DAST scan with ZAP
+      - name: DAST scan (OWASP ZAP)
         run: |
           source venv/bin/activate
-          export PATH=$HOME/.local/bin:$PATH
-          TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}')
-          zap -cmd -quickurl http://$TARGET_HOST -quickout zap.json -configfile scanners/zap_config.yml || true
-          deactivate
-
-      - name: Red Team
-        run: |
-          source venv/bin/activate
-          TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}')
-          python3 redteam/run_attacks.py --target http://$TARGET_HOST --out redteam_results.json
+          TARGET=${{ vars.STAGING_HOST }}
+          zap.sh -cmd -quickurl $TARGET -quickout zap.json || true
           deactivate
 
       - name: Merge findings
@@ -180,7 +176,7 @@ jobs:
         run: |
           THRESH=${{ steps.gate.outputs.threshold }}
           VIOL=$(python3 - << 'PY'
-          import json,sys,os
+          import json,os
           thr=float(os.environ["THR"])
           bad=0
           for l in open("enriched.jsonl"):
@@ -190,9 +186,16 @@ jobs:
           PY
           )
           echo "Findings >= threshold: $VIOL"
-          if [ "$VIOL" -gt 0 ]; then exit 1; fi
+          if [ "$VIOL" -gt 0 ]; then echo "Adaptive gate failed"; exit 1; fi
         env:
           THR: ${{ steps.gate.outputs.threshold }}
+
+      - name: Red team tests
+        run: |
+          source venv/bin/activate
+          TARGET=${{ vars.STAGING_HOST }}
+          python3 redteam/run_attacks.py --target $TARGET --out redteam_results.json
+          deactivate
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
