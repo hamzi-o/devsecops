@@ -7,11 +7,6 @@ on:
     branches:
       - main
 
-env:
-  NS: app-test
-  LOCAL_BIN: $HOME/.local/bin
-  PATH: $HOME/.local/bin:$PATH
-
 jobs:
   build-and-scan:
     runs-on: self-hosted
@@ -35,78 +30,91 @@ jobs:
           pip install -r requirements.txt
           deactivate
 
-      - name: Install local binaries for scanners
+      - name: Install local scanners
         run: |
-          mkdir -p $LOCAL_BIN
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $LOCAL_BIN v0.64.1
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xz -C $LOCAL_BIN gitleaks
-          curl -L https://github.com/open-policy-agent/conftest/releases/download/v0.60.0/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xz -C $LOCAL_BIN conftest
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $LOCAL_BIN v1.12.2
-          chmod +x $LOCAL_BIN/*
-
-      - name: Verify scanner installation
-        run: |
+          mkdir -p $HOME/.local/bin
+          export PATH=$HOME/.local/bin:$PATH
           source venv/bin/activate
-          semgrep --version || { echo "Semgrep installation failed"; exit 1; }
-          checkov --version || { echo "Checkov installation failed"; exit 1; }
+          pip install semgrep==1.68.0 checkov==3.2.261 jinja2==3.1.4 sentence-transformers==2.7.0 joblib==1.4.2 scikit-learn==1.4.2 lightgbm==4.3.0 openai==1.35.0 pyyaml==6.0.2 urllib3==1.26.20
           deactivate
-          gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
-          trivy --version || { echo "Trivy installation failed"; exit 1; }
-          syft --version || { echo "Syft installation failed"; exit 1; }
-          zap.sh -version || echo "OWASP ZAP CLI not found, skip for now"
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin v0.64.1
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
+          curl -L https://github.com/open-policy-agent/conftest/releases/download/v0.60.0/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin v1.12.2
+          chmod +x $HOME/.local/bin/*
+
+      - name: Verify scanners
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          source venv/bin/activate
+          semgrep --version || { echo "Semgrep failed"; exit 1; }
+          checkov --version || { echo "Checkov failed"; exit 1; }
+          deactivate
+          gitleaks version || { echo "Gitleaks failed"; exit 1; }
+          trivy --version || { echo "Trivy failed"; exit 1; }
+          syft --version || { echo "Syft failed"; exit 1; }
+          conftest version || echo "Conftest not installed, ignoring"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ secrets.GHCR_USERNAME }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          install: true
+          use: true
 
       - name: Build & push Docker image
         id: meta
         run: |
           GIT_SHA=$(git rev-parse --short HEAD)
-          IMAGE="${{ secrets.REGISTRY }}/app:$GIT_SHA"
           echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
-          docker build -t $IMAGE -t ${{ secrets.REGISTRY }}/app:latest app
-          docker push $IMAGE
-          docker push ${{ secrets.REGISTRY }}/app:latest
+          docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest app
+          docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
 
-      - name: Patch deployment with correct image
+  deploy-and-security:
+    runs-on: self-hosted
+    needs: build-and-scan
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup kubeconfig
         run: |
-          sed -i "s|\${IMAGE_TAG}|${GITHUB_SHA}|g" app/k8s/deployment.yaml
-          cat app/k8s/deployment.yaml | grep image:
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
+          chmod 600 kubeconfig
+          export KUBECONFIG=kubeconfig
 
-      - name: Create GHCR imagePullSecret
-        run: |
-          kubectl create namespace $NS --dry-run=client -o yaml | kubectl apply -f -
-          kubectl create secret docker-registry ghcr-secret \
-            --docker-server=ghcr.io \
-            --docker-username=${{ secrets.GHCR_USERNAME }} \
-            --docker-password=${{ secrets.GHCR_TOKEN }} \
-            -n $NS --dry-run=client -o yaml | kubectl apply -f -
-          kubectl patch serviceaccount default -p '{"imagePullSecrets":[{"name":"ghcr-secret"}]}' -n $NS
+      - name: Deploy namespace
+        run: kubectl apply -f app/k8s/namespace.yaml || true
 
-      - name: Deploy to k3s
+      - name: Deploy app
+        env:
+          IMAGE_TAG: ${{ needs.build-and-scan.outputs.IMAGE_TAG }}
         run: |
           export KUBECONFIG=kubeconfig
-          kubectl apply -f app/k8s/namespace.yaml
+          sed -i "s|\${IMAGE_TAG}|${IMAGE_TAG}|g" app/k8s/deployment.yaml
           kubectl apply -f app/k8s/deployment.yaml
           kubectl apply -f app/k8s/service.yaml
           kubectl apply -f app/k8s/ingress.yaml
           kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
           kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
+          kubectl rollout status -n app-test deploy/demo-app --timeout=300s
 
-      - name: Rollout status and debug
+      - name: Get STAGING_HOST
+        id: get-host
         run: |
           export KUBECONFIG=kubeconfig
-          kubectl rollout status deployment/demo-app -n $NS --timeout=180s || true
-          kubectl describe deployment demo-app -n $NS || true
-          kubectl get pods -n $NS || true
-          kubectl logs -l app=demo-app -n $NS --tail=50 || true
+          STAGING_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' || kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' || echo "")
+          if [ -z "$STAGING_HOST" ]; then
+            echo "STAGING_HOST not found, using vars.STAGING_HOST"
+          else
+            echo "STAGING_HOST=http://$STAGING_HOST" >> $GITHUB_ENV
+          fi
+
+      - name: DAST scan (OWASP ZAP)
+        run: |
+          source venv/bin/activate
+          TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
+          export PATH=$HOME/.local/bin:$PATH
+          zap -cmd -quickurl $TARGET_HOST -quickout zap.json -configfile scanners/zap_config.yml || true
+          deactivate
 
       - name: SAST scan
         run: |
@@ -133,13 +141,6 @@ jobs:
       - name: Generate SBOM
         run: syft dir:app -o json > sbom.json
 
-      - name: DAST scan (OWASP ZAP)
-        run: |
-          source venv/bin/activate
-          TARGET=${{ vars.STAGING_HOST }}
-          zap.sh -cmd -quickurl $TARGET -quickout zap.json || true
-          deactivate
-
       - name: Merge findings
         run: |
           source venv/bin/activate
@@ -152,7 +153,7 @@ jobs:
             --out findings.jsonl
           deactivate
 
-      - name: AI inference + HTML report
+      - name: Run inference
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
@@ -164,7 +165,7 @@ jobs:
             --report report.html
           deactivate
 
-      - name: Adaptive gate threshold
+      - name: Evaluate adaptive gate
         id: gate
         run: |
           source venv/bin/activate
@@ -190,11 +191,24 @@ jobs:
         env:
           THR: ${{ steps.gate.outputs.threshold }}
 
+      - name: Threat model update
+        run: |
+          source venv/bin/activate
+          python3 threatmodel/feedback.py enriched.jsonl
+          deactivate
+
+      - name: Drift detection
+        run: |
+          export KUBECONFIG=kubeconfig
+          source venv/bin/activate
+          python3 drift/check.py
+          deactivate
+
       - name: Red team tests
         run: |
           source venv/bin/activate
-          TARGET=${{ vars.STAGING_HOST }}
-          python3 redteam/run_attacks.py --target $TARGET --out redteam_results.json
+          TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
+          python3 redteam/run_attacks.py --target $TARGET_HOST --out redteam_results.json
           deactivate
 
       - name: Upload artifacts
@@ -205,10 +219,10 @@ jobs:
             report.html
             findings.jsonl
             enriched.jsonl
-            redteam_results.json
             zap.json
             sast.json
             secrets.json
             iac.json
             sca.json
             sbom.json
+            redteam_results.json
