@@ -11,7 +11,7 @@ jobs:
   build-and-scan:
     runs-on: self-hosted
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Cache Python dependencies
@@ -36,27 +36,27 @@ jobs:
 
           # Trivy
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin v0.64.1
-          
+
           # Gitleaks
           curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xz -C $HOME/.local/bin gitleaks
-          
+
           # Conftest
           curl -L https://github.com/open-policy-agent/conftest/releases/download/v0.60.0/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xz -C $HOME/.local/bin conftest
-          
+
           # Syft
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin v1.12.2
-          
-          # Verify binaries
-          trivy --version
-          gitleaks version
-          syft --version
 
-      - name: Verify Python scanners
+      - name: Verify scanners
         run: |
+          export PATH=$HOME/.local/bin:$PATH
           source venv/bin/activate
           semgrep --version || { echo "Semgrep installation failed"; exit 1; }
           checkov --version || { echo "Checkov installation failed"; exit 1; }
           deactivate
+          trivy --version || { echo "Trivy installation failed"; exit 1; }
+          gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
+          conftest --help | head -1 || { echo "Conftest installation failed"; exit 1; }
+          syft --version || { echo "Syft installation failed"; exit 1; }
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -81,16 +81,19 @@ jobs:
           push: true
           tags: ${{ secrets.REGISTRY }}/app:${{ github.sha }}
 
-      - name: Deploy Kubernetes resources
-        env:
-          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
-        if: github.event_name == 'push'
+      - name: Setup kubeconfig
         run: |
-          echo "$KUBE_CONFIG" | base64 -d > kubeconfig
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
           chmod 600 kubeconfig
           export KUBECONFIG=kubeconfig
+
+      - name: Create namespace
+        run: kubectl apply -f app/k8s/namespace.yaml
+
+      - name: Deploy resources
+        run: |
+          export KUBECONFIG=kubeconfig
           sed -i "s|\${IMAGE_TAG}|${{ github.sha }}|g" app/k8s/deployment.yaml
-          kubectl apply -f app/k8s/namespace.yaml
           kubectl apply -f app/k8s/deployment.yaml
           kubectl apply -f app/k8s/service.yaml
           kubectl apply -f app/k8s/ingress.yaml
@@ -98,7 +101,6 @@ jobs:
           kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
 
       - name: Wait for deployment
-        if: github.event_name == 'push'
         run: |
           export KUBECONFIG=kubeconfig
           kubectl wait --for=condition=available --timeout=300s deployment/devsecops-app -n devsecops
@@ -106,7 +108,6 @@ jobs:
 
       - name: Get STAGING_HOST
         id: get-host
-        if: github.event_name == 'push'
         run: |
           export KUBECONFIG=kubeconfig
           STAGING_HOST=$(kubectl get ingress -n devsecops -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' || kubectl get ingress -n devsecops -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' || echo "")
@@ -114,10 +115,8 @@ jobs:
             echo "STAGING_HOST not found, using vars.STAGING_HOST"
           else
             echo "STAGING_HOST=http://$STAGING_HOST" >> $GITHUB_ENV
-          fi
 
       - name: Validate STAGING_HOST
-        if: github.event_name == 'push'
         run: |
           TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
           if [ -z "$TARGET_HOST" ]; then
@@ -127,7 +126,6 @@ jobs:
           curl -I $TARGET_HOST || echo "Warning: Failed to reach $TARGET_HOST"
 
       - name: DAST scan with OWASP ZAP
-        if: github.event_name == 'push' && (env.STAGING_HOST != '' || vars.STAGING_HOST != '')
         run: |
           mkdir -p zap_reports
           TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
@@ -196,7 +194,7 @@ jobs:
           echo "threshold=$(jq -r .adaptive_threshold gate.json)" >> $GITHUB_OUTPUT
           deactivate
 
-      - name: Check gate
+      - name: Check adaptive gate
         run: |
           THRESH=${{ steps.gate.outputs.threshold }}
           VIOL=$(python3 - << 'PY'
@@ -214,8 +212,7 @@ jobs:
         env:
           THR: ${{ steps.gate.outputs.threshold }}
 
-      - name: Red team
-        if: github.event_name == 'push' && (env.STAGING_HOST != '' || vars.STAGING_HOST != '')
+      - name: Run red team attacks
         run: |
           source venv/bin/activate
           TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
