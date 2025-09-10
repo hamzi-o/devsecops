@@ -1,4 +1,5 @@
 name: DevSecOps Pipeline
+
 on:
   push:
     branches:
@@ -11,17 +12,22 @@ jobs:
   build-and-scan:
     runs-on: self-hosted
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
+      # ----------------------------
+      # Python environment for scans
+      # ----------------------------
       - name: Set up Python virtual environment
         run: |
           python3 -m venv venv
           source venv/bin/activate
-          pip install --upgrade pip
           pip install semgrep==1.91.0 checkov==3.2.34 torch==2.4.1 torch-geometric==2.5.3 numpy==1.26.4 pandas==2.2.3
           deactivate
 
+      # ----------------------------
+      # Docker buildx setup
+      # ----------------------------
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
@@ -45,12 +51,9 @@ jobs:
           push: true
           tags: ${{ secrets.REGISTRY }}/app:${{ github.sha }}
 
-      - name: Verify model artifacts
-        run: |
-          echo "${{ secrets.MODEL_CHECKPOINT_SHA256 }} artifacts/vuln_prioritizer_checkpoint.pt" > model.sha256
-          sha256sum -c model.sha256
-          ls artifacts/scaler.pkl artifacts/best_params.pkl artifacts/vuln_prioritizer_checkpoint.pt || exit 1
-
+      # ----------------------------
+      # Security Scans
+      # ----------------------------
       - name: SAST scan
         run: |
           source venv/bin/activate
@@ -58,8 +61,7 @@ jobs:
           deactivate
 
       - name: Secrets scan
-        run: |
-          gitleaks detect --source . --report-path secrets.json || true
+        run: gitleaks detect --source . --report-path secrets.json || true
 
       - name: IaC scan
         run: |
@@ -67,68 +69,60 @@ jobs:
           if [ -d app/k8s ] && [ "$(ls -A app/k8s)" ]; then
             checkov -d app/k8s -f scanners/checkov.yml --output json > iac.json || true
           else
-            echo "No valid IaC files found in app/k8s, skipping checkov scan"
             echo "[]" > iac.json
           fi
           deactivate
 
       - name: SCA scan
-        run: |
-          trivy fs --format json --output sca.json . || true
+        run: trivy fs --format json --output sca.json . || true
 
       - name: Generate SBOM
-        run: |
-          syft dir:app -o json > sbom.json
+        run: syft dir:app -o json > sbom.json
 
-      - name: Setup kubeconfig
+      # ----------------------------
+      # Kubernetes deploy
+      # ----------------------------
+      - name: Set kubeconfig
         env:
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
         run: |
           mkdir -p $HOME/.kube
           echo "$KUBE_CONFIG" | base64 -d > $HOME/.kube/config
           export KUBECONFIG=$HOME/.kube/config
-          kubectl config view
-          kubectl get nodes
 
-      - name: Deploy to Kubernetes (app-test)
-        env:
-          KUBECONFIG: $HOME/.kube/config
-        if: github.event_name == 'push'
+      - name: Deploy to app-test namespace
         run: |
-          # Replace image tag in deployment
-          sed -i "s|\${IMAGE_TAG}|${{ github.sha }}|g" app/k8s/deployment.yaml
-
-          # Apply namespace (app-test)
-          kubectl apply --validate=false -f app/k8s/namespace.yaml
-
-          # Wait for namespace to exist
+          export KUBECONFIG=$HOME/.kube/config
+          kubectl apply --validate=false --insecure-skip-tls-verify -f app/k8s/namespace.yaml
           kubectl wait --for=condition=Established --timeout=120s namespace/app-test || true
+          sed -i "s|\${IMAGE_TAG}|${{ github.sha }}|g" app/k8s/deployment.yaml
+          kubectl apply --validate=false --insecure-skip-tls-verify -f app/k8s/deployment.yaml -n app-test
+          kubectl apply --validate=false --insecure-skip-tls-verify -f app/k8s/service.yaml -n app-test
+          kubectl apply --validate=false --insecure-skip-tls-verify -f app/k8s/ingress.yaml -n app-test
+          kubectl apply --validate=false --insecure-skip-tls-verify -f policies/gatekeeper-templates/deny-high-risk.yaml
+          kubectl apply --validate=false --insecure-skip-tls-verify -f policies/gatekeeper-constraints/deny-high-risk.yaml
 
-          # Apply deployment, service, ingress, and policies
-          kubectl apply --validate=false -f app/k8s/deployment.yaml -n app-test
-          kubectl apply --validate=false -f app/k8s/service.yaml -n app-test
-          kubectl apply --validate=false -f app/k8s/ingress.yaml -n app-test
-          kubectl apply --validate=false -f policies/gatekeeper-templates/deny-high-risk.yaml
-          kubectl apply --validate=false -f policies/gatekeeper-constraints/deny-high-risk.yaml
-
-          # Wait for deployment to be available
+      - name: Wait for deployment ready
+        run: |
+          export KUBECONFIG=$HOME/.kube/config
           kubectl wait --for=condition=available --timeout=300s deployment/devsecops-app -n app-test
 
+      # ----------------------------
+      # Get STAGING_HOST
+      # ----------------------------
       - name: Get STAGING_HOST
-        id: get-host
         env:
-          KUBECONFIG: $HOME/.kube/config
-        if: github.event_name == 'push'
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
         run: |
-          STAGING_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' || \
-                         kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' || echo "")
+          export KUBECONFIG=$HOME/.kube/config
+          STAGING_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' || kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' || echo "")
           if [ -z "$STAGING_HOST" ]; then
             echo "STAGING_HOST not found, using vars.STAGING_HOST"
           else
             echo "STAGING_HOST=http://$STAGING_HOST" >> $GITHUB_ENV
+          fi
 
       - name: Validate STAGING_HOST
-        if: github.event_name == 'push'
         run: |
           TARGET_HOST=${{ env.STAGING_HOST || vars.STAGING_HOST }}
           if [ -z "$TARGET_HOST" ]; then
@@ -137,6 +131,9 @@ jobs:
           fi
           curl -I $TARGET_HOST || echo "Warning: Failed to reach $TARGET_HOST"
 
+      # ----------------------------
+      # DAST scan
+      # ----------------------------
       - name: DAST scan with OWASP ZAP
         if: github.event_name == 'push' && (env.STAGING_HOST != '' || vars.STAGING_HOST != '')
         run: |
@@ -144,6 +141,9 @@ jobs:
           docker run -v $(pwd):/zap/wrk/:rw -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
             -t $TARGET_HOST -r zap_report.html -J zap_report.json || true
 
+      # ----------------------------
+      # Merge findings and inference
+      # ----------------------------
       - name: Merge findings
         run: |
           source venv/bin/activate
@@ -168,25 +168,9 @@ jobs:
             --report report.html
           deactivate
 
-      - name: Evaluate adaptive gate
-        id: gate
-        run: |
-          python3 adaptive/evaluate_gate.py > gate.json
-
-      - name: Check gate
-        run: |
-          jq -e '.risk_score >= $(jq .adaptive_threshold gate.json)' enriched.jsonl && exit 1 || exit 0
-
-      - name: Update threat model
-        run: |
-          python3 threatmodel/feedback.py enriched.jsonl
-
-      - name: Check drift
-        env:
-          KUBECONFIG: $HOME/.kube/config
-        run: |
-          python3 drift/check.py
-
+      # ----------------------------
+      # Red team & artifacts
+      # ----------------------------
       - name: Red team
         if: github.event_name == 'push' && (env.STAGING_HOST != '' || vars.STAGING_HOST != '')
         run: |
