@@ -44,11 +44,25 @@ jobs:
         run: |
           GIT_SHA=$(git rev-parse --short HEAD)
           echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
-          docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest app
-          docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
-          docker push ${{ secrets.REGISTRY }}/app:latest
-          # Replace IMAGE_TAG in deployment manifest
+          echo "Building image: ${{ secrets.REGISTRY }}/devsecops/app:$GIT_SHA"
+          docker build -t ${{ secrets.REGISTRY }}/devsecops/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/devsecops/app:latest app
+          if [ $? -ne 0 ]; then
+            echo "Docker build failed"
+            exit 1
+          fi
+          docker push ${{ secrets.REGISTRY }}/devsecops/app:$GIT_SHA
+          if [ $? -ne 0 ]; then
+            echo "Docker push failed for tag $GIT_SHA"
+            exit 1
+          fi
+          docker push ${{ secrets.REGISTRY }}/devsecops/app:latest
+          if [ $? -ne 0 ]; then
+            echo "Docker push failed for tag latest"
+            exit 1
+          fi
           sed -i "s|\${IMAGE_TAG}|$GIT_SHA|g" app/k8s/deployment.yaml
+          echo "=== Updated deployment.yaml ==="
+          cat app/k8s/deployment.yaml
 
       - name: Deploy app to k3s
         run: |
@@ -59,16 +73,10 @@ jobs:
           # Apply namespace first
           kubectl apply -f app/k8s/namespace.yaml
           
-          # Create image pull secret for GHCR
-          kubectl create secret docker-registry ghcr-secret \
-            --docker-server=${{ secrets.REGISTRY }} \
-            --docker-username=${{ secrets.GHCR_USERNAME }} \
-            --docker-password=${{ secrets.GHCR_TOKEN }} \
-            --namespace=app-test \
-            --dry-run=client -o yaml | kubectl apply -f -
-          
           # Apply other manifests
           kubectl apply -f app/k8s/deployment.yaml
+          echo "=== Deployment YAML ==="
+          cat app/k8s/deployment.yaml
           kubectl apply -f app/k8s/service.yaml
           kubectl apply -f app/k8s/ingress.yaml
           kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
@@ -82,6 +90,8 @@ jobs:
           kubectl get deployment demo-app -n app-test -o wide
           echo "=== Pod Status ==="
           kubectl get pods -n app-test -o wide
+          echo "=== Pod Descriptions ==="
+          kubectl describe pods -n app-test -l app=demo-app
           echo "=== Recent Events ==="
           kubectl get events -n app-test --sort-by='.lastTimestamp' | tail -10
           
