@@ -26,21 +26,21 @@ jobs:
           echo "=== Clearing pip cache to ensure fresh dependency installation ==="
           rm -rf ~/.cache/pip/*
           pip install -r requirements.txt
-          echo "=== Installing openai==1.51.0 explicitly ==="
-          pip install openai==1.51.0
+          echo "=== Installing openai==1.51.0 explicitly with no dependencies ==="
+          pip install --no-deps openai==1.51.0
           echo "=== Verifying installed packages ==="
           pip list
           echo "=== Checking openai version ==="
           python3 -c "import openai; print(openai.__version__)" || {
             echo "Failed to import openai. Reinstalling openai==1.51.0."
-            pip install --force-reinstall openai==1.51.0
+            pip install --no-deps --force-reinstall openai==1.51.0
             python3 -c "import openai; print(openai.__version__)"
           }
           echo "=== Checking checkov version ==="
-          python3 -c "import checkov; print(checkov.__version__)" || {
-            echo "Failed to import checkov. Reinstalling checkov==3.2.258."
+          checkov --version || {
+            echo "Failed to verify checkov version. Reinstalling checkov==3.2.258."
             pip install --force-reinstall checkov==3.2.258
-            python3 -c "import checkov; print(checkov.__version__)"
+            checkov --version
           }
           echo "=== Checking OpenAI class import ==="
           python3 -c "from openai import OpenAI; print('OpenAI import successful')" || {
