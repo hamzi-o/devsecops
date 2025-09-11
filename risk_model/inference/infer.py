@@ -5,7 +5,9 @@ import pathlib
 import os
 from typing import Dict, List, Any
 import torch
+import torch.nn as nn
 from torch_geometric.data import Data
+from torch_geometric.nn import GCNConv
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.preprocessing import MinMaxScaler
@@ -22,6 +24,23 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Define the GNN model architecture (adjust based on actual model if different)
+class VulnPrioritizer(nn.Module):
+    def __init__(self, input_dim=384, hidden_dim=128, output_dim=1):
+        super(VulnPrioritizer, self).__init__()
+        self.conv1 = GCNConv(input_dim, hidden_dim)
+        self.conv2 = GCNConv(hidden_dim, hidden_dim)
+        self.fc = nn.Linear(hidden_dim, output_dim)
+        self.relu = nn.ReLU()
+
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index)
+        x = self.relu(x)
+        x = self.conv2(x, edge_index)
+        x = self.relu(x)
+        x = self.fc(x)
+        return x
 
 def load_findings(findings_path: pathlib.Path) -> List[Dict[str, Any]]:
     """Load findings from a JSONL file."""
@@ -88,7 +107,7 @@ def build_graph(embeddings: np.ndarray, findings: List[Dict[str, Any]]) -> Data:
         logger.error(f"Error building graph: {e}")
         raise
 
-def prioritize_vulnerabilities(data: Data, model: torch.nn.Module, scaler: MinMaxScaler) -> np.ndarray:
+def prioritize_vulnerabilities(data: Data, model: nn.Module, scaler: MinMaxScaler) -> np.ndarray:
     """Prioritize vulnerabilities using the trained model."""
     try:
         model.eval()
@@ -195,8 +214,14 @@ def main():
 
     # Initialize models and clients
     client = OpenAI(api_key=api_key)
-    sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
-    model = torch.load(args.artifacts_dir / "vuln_prioritizer_checkpoint.pt", map_location=torch.device('cpu'), weights_only=True)
+    try:
+        sentence_model = SentenceTransformer('all-MiniLM-L6-v2', local_files_only=True)
+    except Exception as e:
+        logger.warning(f"Failed to load SentenceTransformer from cache: {e}. Attempting to download.")
+        sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+    model = VulnPrioritizer(input_dim=384)  # Adjust input_dim based on all-MiniLM-L6-v2 output
+    state_dict = torch.load(args.artifacts_dir / "vuln_prioritizer_checkpoint.pt", map_location=torch.device('cpu'), weights_only=True)
+    model.load_state_dict(state_dict)
     scaler = joblib.load(args.artifacts_dir / "scaler.pkl")
 
     # Process findings
