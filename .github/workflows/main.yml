@@ -130,6 +130,7 @@ jobs:
           rm -rf $HOME/.cache/*
 
       - name: Install local scanners
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -147,16 +148,24 @@ jobs:
           file trivy.tar.gz
           head -c 1000 trivy.tar.gz
           echo "Extracting tarball..."
-          tar -xzf trivy.tar.gz -C $HOME/.local/bin || {
-            echo "Tarball extraction failed, falling back to Docker image for SCA scan"
-            echo "trivy_docker_fallback=true" >> $GITHUB_ENV
-          }
-          if [ "${{ env.trivy_docker_fallback }}" != "true" ]; then
+          tar -xzf trivy.tar.gz -C $HOME/.local/bin
+          if [ $? -eq 0 ]; then
             echo "Verifying downloaded Trivy binary..."
             file $HOME/.local/bin/trivy
             chmod +x $HOME/.local/bin/trivy
+            $HOME/.local/bin/trivy --version && echo "Trivy binary is functional" || {
+              echo "Trivy binary not functional, falling back to Docker image for SCA scan"
+              echo "trivy_docker_fallback=true" >> $GITHUB_ENV
+            }
+          else
+            echo "Tarball extraction failed, falling back to Docker image for SCA scan"
+            echo "trivy_docker_fallback=true" >> $GITHUB_ENV
           fi
           rm -f trivy.tar.gz
+          
+          # Debug any unexpected tar commands
+          echo "Checking for unexpected tar commands..."
+          ps aux | grep tar || true
           
           # Install other security scanners
           curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
