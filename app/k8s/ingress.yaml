@@ -3,11 +3,17 @@ kind: Ingress
 metadata:
   name: demo-app-ing
   namespace: app-test
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
   rules:
-    - host: staging.hamza-builds.info  # e.g., 203.0.113.10.nip.io or staging.YOUR_DOMAIN
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend: { service: { name: demo-app-svc, port: { number: 80 } } }
+  - host: staging.hamza-builds.info
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: demo-app-svc
+            port:
+              number: 80

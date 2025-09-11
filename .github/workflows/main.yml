@@ -24,6 +24,7 @@ jobs:
           source venv/bin/activate
           pip install --upgrade pip
           pip install -r requirements.txt
+          pip list
           deactivate
 
       - name: Set up Docker Buildx
@@ -104,6 +105,8 @@ jobs:
           kubectl describe pods -n app-test -l app=demo-app
           echo "=== Recent Events ==="
           kubectl get events -n app-test --sort-by='.lastTimestamp' | tail -10
+          echo "=== Ingress Debug ==="
+          kubectl describe ingress demo-app-ing -n app-test
           
           # Wait for rollout with extended timeout and better error handling
           if ! kubectl rollout status -n app-test deploy/demo-app --timeout=600s; then
@@ -136,9 +139,6 @@ jobs:
         run: |
           mkdir -p $HOME/.local/bin
           export PATH=$HOME/.local/bin:$PATH
-          source venv/bin/activate
-          pip install semgrep checkov jinja2 sentence-transformers joblib scikit-learn lightgbm openai pyyaml
-          deactivate
           
           # Install Trivy
           TRIVY_VERSION="0.66.0"
@@ -172,23 +172,6 @@ jobs:
           curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
           
-          # Install OWASP ZAP
-          echo "Installing OWASP ZAP..."
-          curl -L https://github.com/zaproxy/zaproxy/releases/latest/download/ZAP_Linux.tar.gz -o zap.tar.gz
-          echo "Inspecting ZAP tarball..."
-          file zap.tar.gz
-          tar -tzf zap.tar.gz || true
-          echo "Extracting ZAP tarball..."
-          tar -xzf zap.tar.gz -C $HOME/.local/bin
-          if [ -f "$HOME/.local/bin/ZAP_*/zap.sh" ]; then
-            mv $HOME/.local/bin/ZAP_*/zap.sh $HOME/.local/bin/
-            chmod +x $HOME/.local/bin/zap.sh
-            echo "ZAP installed successfully"
-          else
-            echo "ZAP installation failed, zap.sh not found"
-          fi
-          rm -f zap.tar.gz
-          
           # Add to PATH for this session
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
@@ -196,23 +179,21 @@ jobs:
         continue-on-error: true
         run: |
           export PATH=$HOME/.local/bin:$PATH
+          source venv/bin/activate
           echo "=== Scanner Versions ==="
-          semgrep --version
-          checkov --version
+          semgrep --version || { echo "Semgrep installation failed"; exit 1; }
+          checkov --version || { echo "Checkov installation failed"; exit 1; }
+          zap --version || { echo "OWASP ZAP installation failed"; exit 1; }
+          deactivate
           if [ "${{ env.trivy_docker_fallback }}" != "true" ]; then
             trivy --version || echo "Trivy binary not installed, using Docker fallback"
             echo "trivy_docker_fallback=true" >> $GITHUB_ENV
           else
             echo "Trivy binary not installed, using Docker image for SCA scan"
           fi
-          syft --version
+          syft --version || { echo "Syft installation failed"; exit 1; }
           conftest --version || true
-          gitleaks version
-          if [ -f "$HOME/.local/bin/zap.sh" ]; then
-            zap.sh -version || echo "ZAP not functional"
-          else
-            echo "zap.sh not found, skipping version check"
-          fi
+          gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
 
       - name: Run SAST scan
         continue-on-error: true
@@ -233,11 +214,19 @@ jobs:
         run: |
           export PATH=$HOME/.local/bin:$PATH
           source venv/bin/activate
+          echo "=== Checking app/k8s directory ==="
+          ls -l app/k8s || echo "app/k8s directory not found or empty"
           if [ -d app/k8s ] && [ "$(ls -A app/k8s)" ]; then
-            checkov -d app/k8s --output json -f scanners/checkov.yml > iac.json || echo "[]" > iac.json
+            echo "Running Checkov on app/k8s..."
+            checkov -d app/k8s --output json -f scanners/checkov.yml > iac.json || {
+              echo "Checkov scan failed, creating empty results"
+              echo '{"results": []}' > iac.json
+            }
           else
-            echo "[]" > iac.json
+            echo "No valid IaC files found in app/k8s, creating empty results"
+            echo '{"results": []}' > iac.json
           fi
+          cat iac.json
           deactivate
 
       - name: Run SCA scan
@@ -267,6 +256,8 @@ jobs:
           # Get service endpoint
           kubectl get service demo-app-svc -n app-test
           kubectl get ingress -n app-test
+          echo "=== Ingress Debug ==="
+          kubectl describe ingress demo-app-ing -n app-test
 
       - name: DAST scan with OWASP ZAP
         continue-on-error: true
@@ -279,19 +270,28 @@ jobs:
           TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
           
           if [ -z "$TARGET_HOST" ]; then
-            # Fallback to service ClusterIP for internal testing
+            # Fallback to service ClusterIP
             TARGET_HOST=$(kubectl get service demo-app-svc -n app-test -o jsonpath='{.spec.clusterIP}')
             echo "Using ClusterIP: $TARGET_HOST"
-          else
-            echo "Using Ingress IP: $TARGET_HOST"
           fi
           
-          if [ -n "$TARGET_HOST" ] && [ -f "$HOME/.local/bin/zap.sh" ]; then
-            zap.sh -cmd -quickurl http://$TARGET_HOST:8080 -quickout zap.json -configfile scanners/zap_config.yml || echo "[]" > zap.json
+          # Final fallback to STAGING_HOST variable
+          if [ -z "$TARGET_HOST" ]; then
+            TARGET_HOST=${{ vars.STAGING_HOST }}
+            echo "Using STAGING_HOST variable: $TARGET_HOST"
+          fi
+          
+          if [ -n "$TARGET_HOST" ]; then
+            echo "Running OWASP ZAP scan on http://$TARGET_HOST:8080"
+            zap -cmd -quickurl http://$TARGET_HOST:8080 -quickout zap.json -configfile scanners/zap_config.yml || {
+              echo "OWASP ZAP scan failed, creating empty results"
+              echo "[]" > zap.json
+            }
           else
-            echo "No target host or zap.sh not found, skipping DAST scan"
+            echo "No valid target host found, skipping DAST scan"
             echo "[]" > zap.json
           fi
+          cat zap.json
           deactivate
 
       - name: Merge findings
@@ -379,12 +379,18 @@ jobs:
           
           if [ -z "$TARGET_HOST" ]; then
             TARGET_HOST=$(kubectl get service demo-app-svc -n app-test -o jsonpath='{.spec.clusterIP}')
+            echo "Using ClusterIP: $TARGET_HOST"
+          fi
+          
+          if [ -z "$TARGET_HOST" ]; then
+            TARGET_HOST=${{ vars.STAGING_HOST }}
+            echo "Using STAGING_HOST variable: $TARGET_HOST"
           fi
           
           if [ -n "$TARGET_HOST" ]; then
             python3 redteam/run_attacks.py --target http://$TARGET_HOST:8080 --out redteam_results.json || echo "[]" > redteam_results.json
           else
-            echo "No target host found for red team tests"
+            echo "No valid target host found for red team tests"
             echo "[]" > redteam_results.json
           fi
           deactivate
