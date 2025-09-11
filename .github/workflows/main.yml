@@ -150,7 +150,7 @@ jobs:
           
           # Install Trivy
           TRIVY_VERSION="0.66.0"
-          echo "Installing Trivy v$TRIVY_VERSION..."
+          echo "Installing Trivy v$ZAP_VERSION..."
           curl -L https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz -o trivy.tar.gz
           tar -xzf trivy.tar.gz -C $HOME/.local/bin
           if [ $? -eq 0 ]; then
@@ -191,7 +191,7 @@ jobs:
           fi
           syft --version || { echo "Syft installation failed"; exit 1; }
           conftest --version || true
-          gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
+          gileaks version || { echo "Gitleaks installation failed"; exit 1; }
 
       - name: Run SAST scan
         continue-on-error: true
@@ -216,10 +216,23 @@ jobs:
           ls -l app/k8s || echo "app/k8s directory not found or empty"
           if [ -d app/k8s ] && [ "$(ls -A app/k8s)" ]; then
             echo "Running Checkov on app/k8s..."
-            checkov -d app/k8s --output json -f scanners/checkov.yml > iac.json || {
-              echo "Checkov scan failed, creating empty results"
-              echo '{"results": []}' > iac.json
-            }
+            if [ -f "./scanners/checkov.yml" ]; then
+              echo "Using checkov.yml config file"
+              checkov -d app/k8s --output json -f scanners/checkov.yml > iac.json 2> checkov_error.log || {
+                echo "Checkov scan failed, creating empty results"
+                echo '{"results": []}' > iac.json
+                echo "=== Checkov Error Log ==="
+                cat checkov_error.log
+              }
+            else
+              echo "checkov.yml not found, running Checkov without config"
+              checkov -d app/k8s --output json > iac.json 2> checkov_error.log || {
+                echo "Checkov scan failed, creating empty results"
+                echo '{"results": []}' > iac.json
+                echo "=== Checkov Error Log ==="
+                cat checkov_error.log
+              }
+            fi
           else
             echo "No valid IaC files found in app/k8s, creating empty results"
             echo '{"results": []}' > iac.json
@@ -316,7 +329,7 @@ jobs:
         run: |
           source venv/bin/activate
           python3 risk_model/inference/infer.py \
-            --artifacts-dir risk_model/artifacts \
+            --artifacts-dir artifacts \
             --in findings.jsonl \
             --out enriched.jsonl \
             --report report.html
