@@ -1,5 +1,5 @@
 semgrep==1.91.0
-checkov==3.2.34
+checkov==3.2.258
 torch==2.4.1
 torch-geometric==2.5.3
 numpy==1.26.4
