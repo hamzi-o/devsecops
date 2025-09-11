@@ -142,14 +142,26 @@ jobs:
           # Install Trivy
           TRIVY_VERSION="0.66.0"
           echo "Installing Trivy v$TRIVY_VERSION..."
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin v$TRIVY_VERSION
+          curl -L https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz -o trivy.tar.gz
+          echo "Verifying tarball integrity..."
+          echo "67aee1be0b261db5b1e1c8973fd2b3a53a0254ad3571a4c3d57673081b6d261f  trivy.tar.gz" | sha256sum -c -
           if [ $? -ne 0 ]; then
-            echo "Trivy installation failed, falling back to Docker image for SCA scan"
+            echo "Tarball checksum verification failed, falling back to Docker image for SCA scan"
             echo "trivy_docker_fallback=true" >> $GITHUB_ENV
           else
-            echo "Verifying downloaded Trivy binary..."
-            file $HOME/.local/bin/trivy
+            echo "Extracting tarball..."
+            file trivy.tar.gz
+            tar -xzf trivy.tar.gz -C $HOME/.local/bin
+            if [ $? -ne 0 ]; then
+              echo "Tarball extraction failed, falling back to Docker image for SCA scan"
+              echo "trivy_docker_fallback=true" >> $GITHUB_ENV
+            else
+              echo "Verifying downloaded Trivy binary..."
+              file $HOME/.local/bin/trivy
+              chmod +x $HOME/.local/bin/trivy
+            fi
           fi
+          rm -f trivy.tar.gz
           
           # Install other security scanners
           curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
