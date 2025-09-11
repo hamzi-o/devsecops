@@ -79,6 +79,9 @@ def parse_dast(file):
         return []
     with open(file) as f:
         data = json.load(f)
+        # Handle case where data is an empty list
+        if isinstance(data, list):
+            return []
         return [
             {
                 "type": "dast",

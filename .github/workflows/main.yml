@@ -118,7 +118,7 @@ jobs:
             echo "=== Pod Logs ==="
             kubectl logs -n app-test -l app=demo-app --tail=50 --all-containers=true --previous=false || true
             echo "=== Previous Pod Logs (if any) ==="
-            kubectl logs -n app-test -l app-test -l app=demo-app --tail=20 --all-containers=true --previous=true || true
+            kubectl logs -n app-test -l app=demo-app --tail=20 --all-containers=true --previous=true || true
             echo "=== All Events ==="
             kubectl get events -n app-test --sort-by='.lastTimestamp'
             exit 1
@@ -166,7 +166,7 @@ jobs:
           rm -f trivy.tar.gz
           
           # Install other security scanners
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gileaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
           curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
           
@@ -231,12 +231,12 @@ jobs:
         continue-on-error: true
         run: |
           export PATH=$HOME/.local/bin:$PATH
-          if [ "${{ env.trivy_docker_fallback }}" == "true" ]; then
-            echo "Running Trivy SCA scan using Docker image..."
-            docker run --rm -v $(pwd):/workspace -w /workspace aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo "[]" > sca.json
-          else
+          if [ "${{ env.trivy_docker_fallback }}" != "true" ]; then
             echo "Running Trivy SCA scan using binary..."
             trivy fs --format json --output sca.json . || echo "[]" > sca.json
+          else
+            echo "Running Trivy SCA scan using Docker image..."
+            docker run --rm -v $(pwd):/workspace -w /workspace aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo "[]" > sca.json
           fi
 
       - name: Generate SBOM
@@ -280,10 +280,18 @@ jobs:
           
           if [ -n "$TARGET_HOST" ]; then
             echo "Running OWASP ZAP scan on http://$TARGET_HOST:8080"
-            $HOME/.local/bin/zap/zap.sh -cmd -quickurl http://$TARGET_HOST:8080 -quickout zap.json -configfile scanners/zap_config.yml || {
-              echo "OWASP ZAP scan failed, creating empty results"
-              echo "[]" > zap.json
-            }
+            if [ -f "./scanners/zap_config.yml" ]; then
+              $HOME/.local/bin/zap/zap.sh -cmd -quickurl http://$TARGET_HOST:8080 -quickout zap.json -configfile ./scanners/zap_config.yml || {
+                echo "OWASP ZAP scan failed, creating empty results"
+                echo "[]" > zap.json
+              }
+            else
+              echo "zap_config.yml not found, running ZAP without config"
+              $HOME/.local/bin/zap/zap.sh -cmd -quickurl http://$TARGET_HOST:8080 -quickout zap.json || {
+                echo "OWASP ZAP scan failed, creating empty results"
+                echo "[]" > zap.json
+              }
+            fi
           else
             echo "No valid target host found, skipping DAST scan"
             echo "[]" > zap.json
