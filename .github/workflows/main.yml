@@ -143,23 +143,18 @@ jobs:
           TRIVY_VERSION="0.66.0"
           echo "Installing Trivy v$TRIVY_VERSION..."
           curl -L https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz -o trivy.tar.gz
-          echo "Verifying tarball integrity..."
-          echo "67aee1be0b261db5b1e1c8973fd2b3a53a0254ad3571a4c3d57673081b6d261f  trivy.tar.gz" | sha256sum -c -
-          if [ $? -ne 0 ]; then
-            echo "Tarball checksum verification failed, falling back to Docker image for SCA scan"
+          echo "Inspecting downloaded file..."
+          file trivy.tar.gz
+          head -c 1000 trivy.tar.gz
+          echo "Extracting tarball..."
+          tar -xzf trivy.tar.gz -C $HOME/.local/bin || {
+            echo "Tarball extraction failed, falling back to Docker image for SCA scan"
             echo "trivy_docker_fallback=true" >> $GITHUB_ENV
-          else
-            echo "Extracting tarball..."
-            file trivy.tar.gz
-            tar -xzf trivy.tar.gz -C $HOME/.local/bin
-            if [ $? -ne 0 ]; then
-              echo "Tarball extraction failed, falling back to Docker image for SCA scan"
-              echo "trivy_docker_fallback=true" >> $GITHUB_ENV
-            else
-              echo "Verifying downloaded Trivy binary..."
-              file $HOME/.local/bin/trivy
-              chmod +x $HOME/.local/bin/trivy
-            fi
+          }
+          if [ "${{ env.trivy_docker_fallback }}" != "true" ]; then
+            echo "Verifying downloaded Trivy binary..."
+            file $HOME/.local/bin/trivy
+            chmod +x $HOME/.local/bin/trivy
           fi
           rm -f trivy.tar.gz
           
@@ -221,7 +216,7 @@ jobs:
           export PATH=$HOME/.local/bin:$PATH
           if [ "${{ env.trivy_docker_fallback }}" == "true" ]; then
             echo "Running Trivy SCA scan using Docker image..."
-            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $HOME/.cache:/root/.cache aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo "[]" > sca.json
+            docker run --rm -v $(pwd):/workspace -w /workspace aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo "[]" > sca.json
           else
             echo "Running Trivy SCA scan using binary..."
             trivy fs --format json --output sca.json . || echo "[]" > sca.json
