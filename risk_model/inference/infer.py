@@ -121,7 +121,9 @@ def prioritize_vulnerabilities(data: Data, model: nn.Module, scaler: MinMaxScale
         with torch.no_grad():
             out = model(data.x, edge_index=data.edge_index)
             scores = out.cpu().numpy().flatten()
-            scores = scaler.transform(scores.reshape(-1, 1)).flatten()
+            # Create a 2D array with scores and a dummy feature to match scaler's expected 2 features
+            scores_2d = np.column_stack((scores, np.zeros_like(scores)))
+            scores = scaler.transform(scores_2d)[:, 0].flatten()  # Take first column (scaled scores)
         logger.info(f"Generated prioritization scores for {len(scores)} findings")
         return scores
     except Exception as e:
