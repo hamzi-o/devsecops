@@ -118,7 +118,7 @@ jobs:
             echo "=== Pod Logs ==="
             kubectl logs -n app-test -l app=demo-app --tail=50 --all-containers=true --previous=false || true
             echo "=== Previous Pod Logs (if any) ==="
-            kubectl logs -n app-test -l app=demo-app --tail=20 --all-containers=true --previous=true || true
+            kubectl logs -n app-test -l app-test -l app=demo-app --tail=20 --all-containers=true --previous=true || true
             echo "=== All Events ==="
             kubectl get events -n app-test --sort-by='.lastTimestamp'
             exit 1
@@ -139,10 +139,6 @@ jobs:
         run: |
           mkdir -p $HOME/.local/bin
           export PATH=$HOME/.local/bin:$PATH
-          
-          # Install Java for OWASP ZAP
-          sudo apt-get update
-          sudo apt-get install -y openjdk-17-jre
           
           # Install OWASP ZAP
           ZAP_VERSION="2.15.0"
@@ -170,7 +166,7 @@ jobs:
           rm -f trivy.tar.gz
           
           # Install other security scanners
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gileaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
           curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
           
