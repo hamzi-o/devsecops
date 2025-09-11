@@ -91,7 +91,10 @@ def generate_embeddings(findings: List[Dict[str, Any]], model: SentenceTransform
     texts = [f"{f['title']} {f['description']}" for f in findings]
     try:
         embeddings = model.encode(texts, convert_to_numpy=True)
-        logger.info(f"Generated embeddings for {len(embeddings)} findings")
+        # Pad embeddings to 773 dimensions to match model input
+        if embeddings.shape[1] < 773:
+            embeddings = np.pad(embeddings, ((0, 0), (0, 773 - embeddings.shape[1])), mode='constant')
+        logger.info(f"Generated embeddings for {len(embeddings)} findings with shape {embeddings.shape}")
         return embeddings
     except Exception as e:
         logger.error(f"Error generating embeddings: {e}")
@@ -219,15 +222,15 @@ def main():
     # Initialize models and clients
     client = OpenAI(api_key=api_key)
     try:
-        # Try loading SentenceTransformer from pre-cached directory
-        sentence_model = SentenceTransformer(args.artifacts_dir / 'all-MiniLM-L6-v2')
+        # Load SentenceTransformer from pre-cached directory
+        sentence_model = SentenceTransformer(str(args.artifacts_dir / 'all-mpnet-base-v2'))
     except Exception as e:
-        logger.warning(f"Failed to load SentenceTransformer from {args.artifacts_dir / 'all-MiniLM-L6-v2'}: {e}. Falling back to default.")
+        logger.warning(f"Failed to load SentenceTransformer from {args.artifacts_dir / 'all-mpnet-base-v2'}: {e}. Falling back to default.")
         try:
-            sentence_model = SentenceTransformer('all-MiniLM-L6-v2', local_files_only=True)
+            sentence_model = SentenceTransformer('all-mpnet-base-v2', local_files_only=True)
         except Exception as e:
             logger.warning(f"Failed to load SentenceTransformer from cache: {e}. Attempting to download.")
-            sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+            sentence_model = SentenceTransformer('all-mpnet-base-v2')
     model = VulnPrioritizer(input_dim=773)
     state_dict = torch.load(args.artifacts_dir / "vuln_prioritizer_checkpoint.pt", map_location=torch.device('cpu'), weights_only=True)
     model.load_state_dict(state_dict)
