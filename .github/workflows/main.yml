@@ -24,7 +24,23 @@ jobs:
           source venv/bin/activate
           pip install --upgrade pip
           pip install -r requirements.txt
+          echo "=== Installing openai==1.51.0 explicitly ==="
+          pip install openai==1.51.0
+          echo "=== Verifying installed packages ==="
           pip list
+          echo "=== Checking openai version ==="
+          python3 -c "import openai; print(openai.__version__)" || {
+            echo "Failed to import openai. Reinstalling openai==1.51.0."
+            pip install --force-reinstall openai==1.51.0
+            python3 -c "import openai; print(openai.__version__)"
+          }
+          echo "=== Checking OpenAI class import ==="
+          python3 -c "from openai import OpenAI; print('OpenAI import successful')" || {
+            echo "OpenAI class import failed."
+            exit 1
+          }
+          echo "=== Checking for dependency conflicts ==="
+          pip check
           deactivate
 
       - name: Set up Docker Buildx
@@ -150,7 +166,7 @@ jobs:
           
           # Install Trivy
           TRIVY_VERSION="0.66.0"
-          echo "Installing Trivy v$ZAP_VERSION..."
+          echo "Installing Trivy v$TRIVY_VERSION..."
           curl -L https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz -o trivy.tar.gz
           tar -xzf trivy.tar.gz -C $HOME/.local/bin
           if [ $? -eq 0 ]; then
@@ -191,7 +207,7 @@ jobs:
           fi
           syft --version || { echo "Syft installation failed"; exit 1; }
           conftest --version || true
-          gileaks version || { echo "Gitleaks installation failed"; exit 1; }
+          gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
 
       - name: Run SAST scan
         continue-on-error: true
