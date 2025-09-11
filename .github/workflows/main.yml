@@ -139,26 +139,16 @@ jobs:
           pip install semgrep checkov jinja2 sentence-transformers joblib scikit-learn lightgbm openai pyyaml
           deactivate
           
-          # Detect architecture
-          ARCH=$(uname -m)
-          if [ "$ARCH" = "x86_64" ]; then
-            TRIVY_ARCH="64bit"
-          elif [ "$ARCH" = "aarch64" ]; then
-            TRIVY_ARCH="ARM64"
-          else
-            echo "Unsupported architecture: $ARCH, falling back to Docker image for Trivy"
-            echo "trivy_docker_fallback=true" >> $GITHUB_ENV
-          fi
-          
           # Install Trivy
-          if [ -z "${{ env.trivy_docker_fallback }}" ]; then
-            TRIVY_VERSION="0.66.0"
-            echo "Installing Trivy for $TRIVY_ARCH..."
-            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin --arch $TRIVY_ARCH v$TRIVY_VERSION
-            if [ $? -ne 0 ]; then
-              echo "Trivy installation failed, falling back to Docker image for SCA scan"
-              echo "trivy_docker_fallback=true" >> $GITHUB_ENV
-            fi
+          TRIVY_VERSION="0.66.0"
+          echo "Installing Trivy v$TRIVY_VERSION..."
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $HOME/.local/bin v$TRIVY_VERSION
+          if [ $? -ne 0 ]; then
+            echo "Trivy installation failed, falling back to Docker image for SCA scan"
+            echo "trivy_docker_fallback=true" >> $GITHUB_ENV
+          else
+            echo "Verifying downloaded Trivy binary..."
+            file $HOME/.local/bin/trivy
           fi
           
           # Install other security scanners
