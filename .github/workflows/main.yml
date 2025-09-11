@@ -26,21 +26,24 @@ jobs:
           echo "=== Clearing pip cache to ensure fresh dependency installation ==="
           rm -rf ~/.cache/pip/*
           pip install -r requirements.txt
-          echo "=== Installing openai==1.51.0 with dependencies ==="
+          echo "=== Ensuring httpx==0.27.2 for openai compatibility ==="
+          pip install httpx==0.27.2
+          echo "=== Installing openai==1.51.0 ==="
           pip install openai==1.51.0
-          echo "=== Ensuring httpx is installed for openai ==="
-          python3 -c "import httpx" || {
-            echo "httpx not found, installing..."
-            pip install httpx
-          }
           echo "=== Verifying installed packages ==="
           pip list
           echo "=== Checking openai version ==="
           python3 -c "import openai; print(openai.__version__)" || {
             echo "Failed to import openai. Ensuring httpx and reinstalling openai==1.51.0."
-            pip install httpx
+            pip install httpx==0.27.2
             pip install openai==1.51.0
             python3 -c "import openai; print(openai.__version__)"
+          }
+          echo "=== Checking httpx version ==="
+          python3 -c "import httpx; print(httpx.__version__)" || {
+            echo "httpx not found, installing httpx==0.27.2."
+            pip install httpx==0.27.2
+            python3 -c "import httpx; print(httpx.__version__)"
           }
           echo "=== Checking checkov version ==="
           checkov --version || {
@@ -238,7 +241,7 @@ jobs:
         continue-on-error: true
         run: |
           export PATH=$HOME/.local/bin:$PATH
-          gitleaks detect --source . --report-path secrets.json || echo "[]" > secrets.json
+          gitleaks detect --source . --report-path secrets.json || echo "[]"> secrets.json
 
       - name: Run IaC scan
         continue-on-error: true
