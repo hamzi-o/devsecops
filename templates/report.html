@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vulnerability Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1, h2 { color: #333; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .high { background-color: #ffcccc; }
+        .medium { background-color: #fff4cc; }
+        .low { background-color: #ccffcc; }
+        .summary { margin-bottom: 30px; }
+    </style>
+</head>
+<body>
+    <h1>Vulnerability Report</h1>
+    <div class="summary">
+        <h2>Summary</h2>
+        <p>Total Findings: {{ summary.total }}</p>
+        <p>High Priority: {{ summary.high }}</p>
+        <p>Medium Priority: {{ summary.medium }}</p>
+        <p>Low Priority: {{ summary.low }}</p>
+    </div>
+    {% for category, findings in categories.items() %}
+        {% if findings %}
+            <h2>{{ category }}</h2>
+            <table>
+                <tr>
+                    <th>ID</th>
+                    <th>Title</th>
+                    <th>Severity</th>
+                    <th>CVE</th>
+                    <th>CVSS</th>
+                    <th>EPSS</th>
+                    <th>KEV</th>
+                    <th>OWASP</th>
+                    <th>Risk Score</th>
+                    <th>Priority</th>
+                    <th>AI Explanation</th>
+                </tr>
+                {% for finding in findings %}
+                    <tr class="{{ finding.priority | lower }}">
+                        <td>{{ finding.id }}</td>
+                        <td>{{ finding.title }}</td>
+                        <td>{{ finding.severity }}</td>
+                        <td>{{ finding.cve }}</td>
+                        <td>{{ finding.cvss }}</td>
+                        <td>{{ finding.epss }}</td>
+                        <td>{{ finding.kev }}</td>
+                        <td>{{ finding.owasp }}</td>
+                        <td>{{ "%.2f" % finding.risk_score }}</td>
+                        <td>{{ finding.priority }}</td>
+                        <td>{{ finding.ai_explanation }}</td>
+                    </tr>
+                {% endfor %}
+            </table>
+        {% endif %}
+    {% endfor %}
+</body>
+</html>
