@@ -156,8 +156,8 @@ jobs:
           echo "=== Checking app/k8s directory ==="
           ls -l app/k8s || echo "app/k8s directory not found or empty"
           echo "=== Checking checkov.yml ==="
-          cat checkov.yml || echo "checkov.yml not found"
-          checkov -d app/k8s --config-file scanners/checkov.yml --output json --output-file-path checkov-report.json 2> checkov_error.log || {
+          cat checkov.yml || { echo "checkov.yml not found"; exit 1; }
+          checkov -d app/k8s --config-file checkov.yml --output json --output-file-path checkov-report.json 2> checkov_error.log || {
             echo "Checkov scan failed, creating empty results"
             echo '{"results": []}' > checkov-report.json
             echo "=== Checkov Error Log ==="
@@ -194,79 +194,8 @@ jobs:
         continue-on-error: true
         run: |
           export KUBECONFIG=kubeconfig
-          cat > zap-config-cm.yaml << 'EOF'
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: zap-config
-  namespace: app-test
-data:
-  zap_config.yml: |
-    env:
-      contexts:
-        - name: "default-context"
-          urls:
-            - "http://demo-app-svc.app-test.svc.cluster.local:80"
-          includePaths: []
-          excludePaths: []
-      authentication:
-        method: "none"
-    jobs:
-      - type: "spider"
-        parameters:
-          maxDepth: 2
-          maxDuration: 5
-      - type: "passiveScan"
-      - type: "activeScan"
-        parameters:
-          policy: "Default Policy"
-          maxDuration: 5
-EOF
-          cat > zap-job.yaml << 'EOF'
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: zap-scan
-  namespace: app-test
-spec:
-  template:
-    spec:
-      containers:
-      - name: zap
-        image: owasp/zap2docker-stable:2.15.0
-        command: ["zap-baseline.py"]
-        args:
-        - "-t"
-        - "http://demo-app-svc.app-test.svc.cluster.local:80"
-        - "-c"
-        - "/zap/wrk/config/zap_config.yml"
-        - "-r"
-        - "/zap/wrk/zap-report.html"
-        - "-J"
-        - "/zap/wrk/zap-report.json"
-        volumeMounts:
-        - name: zap-reports
-          mountPath: /zap/wrk
-        - name: zap-config
-          mountPath: /zap/wrk/config
-        resources:
-          limits:
-            cpu: "500m"
-            memory: "512Mi"
-          requests:
-            cpu: "200m"
-            memory: "256Mi"
-      volumes:
-      - name: zap-reports
-        emptyDir: {}
-      - name: zap-config
-        configMap:
-          name: zap-config
-      restartPolicy: Never
-  backoffLimit: 1
-EOF
-          kubectl apply -f zap-config-cm.yaml
-          kubectl apply -f zap-job.yaml
+          kubectl apply -f scanners/zap-config-cm.yaml
+          kubectl apply -f scanners/zap-job.yaml
           echo "=== Waiting for ZAP job to complete ==="
           kubectl wait --for=condition=complete job/zap-scan -n app-test --timeout=1800s || {
             echo "ZAP scan job failed or timed out"
