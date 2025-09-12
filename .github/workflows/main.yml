@@ -155,21 +155,9 @@ jobs:
           source venv/bin/activate
           echo "=== Checking app/k8s directory ==="
           ls -l app/k8s || echo "app/k8s directory not found or empty"
-          echo "Creating checkov.yml..."
-          cat > checkov.yml << 'EOF'
-framework: kubernetes
-skip-check:
-  - CKV_K8S_20
-soft-fail: true
-file:
-  - app/k8s/deployment.yaml
-  - app/k8s/ingress.yaml
-  - app/k8s/namespace.yaml
-  - app/k8s/service.yaml
-output: json
-output-file-path: checkov-report.json
-EOF
-          checkov -d app/k8s --config-file checkov.yml --output json --output-file-path checkov-report.json 2> checkov_error.log || {
+          echo "=== Checking checkov.yml ==="
+          cat checkov.yml || echo "checkov.yml not found"
+          checkov -d app/k8s --config-file scanners/checkov.yml --output json --output-file-path checkov-report.json 2> checkov_error.log || {
             echo "Checkov scan failed, creating empty results"
             echo '{"results": []}' > checkov-report.json
             echo "=== Checkov Error Log ==="
@@ -286,11 +274,20 @@ EOF
             kubectl get pods -n app-test -l job-name=zap-scan
             POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o name | head -n 1)
             kubectl logs -n app-test ${POD_NAME#pod/} || true
+            echo '{"site": []}' > zap-report.json
             exit 1
           }
           POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o name | head -n 1)
-          kubectl cp app-test/${POD_NAME#pod/}:/zap/wrk/zap-report.json zap-report.json
-          kubectl cp app-test/${POD_NAME#pod/}:/zap/wrk/zap-report.html zap-report.html
+          kubectl cp app-test/${POD_NAME#pod/}:/zap/wrk/zap-report.json zap-report.json 2> zap_cp_error.log || {
+            echo "Error copying zap-report.json"
+            cat zap_cp_error.log
+            echo '{"site": []}' > zap-report.json
+          }
+          kubectl cp app-test/${POD_NAME#pod/}:/zap/wrk/zap-report.html zap-report.html 2> zap_html_cp_error.log || {
+            echo "Error copying zap-report.html"
+            cat zap_html_cp_error.log
+            echo "<html><body>No ZAP report generated</body></html>" > zap-report.html
+          }
           cat zap-report.json
 
       - name: Merge findings

@@ -15,6 +15,7 @@ def load_findings(file_path):
             for line in f:
                 if line.strip():
                     findings.append(json.loads(line))
+        print(f"Loaded {len(findings)} findings from {file_path}")
     except Exception as e:
         print(f"Error loading findings.jsonl: {e}")
     # Add ZAP results
@@ -34,6 +35,7 @@ def load_findings(file_path):
                         'location': alert.get('url', ''),
                         'category': 'App'
                     })
+            print(f"Loaded {len(zap_data.get('site', [{}])[0].get('alerts', []))} ZAP findings")
         except Exception as e:
             print(f"Error loading zap-report.json: {e}")
     else:
@@ -55,6 +57,7 @@ def load_findings(file_path):
                         'location': result.get('file_path', ''),
                         'category': 'Infrastructure'
                     })
+            print(f"Loaded {len(checkov_data.get('results', {}).get('failed_checks', []))} Checkov findings")
         except Exception as e:
             print(f"Error loading checkov-report.json: {e}")
     else:
