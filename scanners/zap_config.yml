@@ -2,7 +2,7 @@ env:
   contexts:
     - name: "default-context"
       urls:
-        - "http://my-app-service.default.svc.cluster.local:8080"
+        - "http://demo-app-svc.app-test.svc.cluster.local:80"
       includePaths: []
       excludePaths: []
   authentication:
@@ -10,10 +10,7 @@ env:
 jobs:
   - type: "spider"
     parameters:
-      maxDepth: 5
-      maxDuration: 10
-  - type: "ajaxSpider"
-    parameters:
+      maxDepth: 2
       maxDuration: 10
   - type: "passiveScan"
   - type: "activeScan"
