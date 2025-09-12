@@ -4,31 +4,42 @@ metadata:
   name: zap-scan
   namespace: app-test
 spec:
-  backoffLimit: 0
   template:
     spec:
-      restartPolicy: Never
       containers:
-        - name: zap
-          image: ghcr.io/zaproxy/zaproxy:2.15.0
-          command:
-            - /bin/sh
-            - -c
-            - |
-              TARGET=$(cat /zap-config/target-url)
-              zap-baseline.py \
-                -t "$TARGET" \
-                -r /zap/wrk/zap-report.html \
-                -J /zap/wrk/zap-report.json \
-                -z "-config globalexcludeurl.url_list.url.regex=.*logout.* -config globalexcludeurl.url_list.url.enabled=true"
-          volumeMounts:
-            - name: zap-config
-              mountPath: /zap-config
-            - name: zap-reports
-              mountPath: /zap/wrk
+      - name: zap
+        image: owasp/zap2docker-stable:2.15.0
+        command: ["/bin/sh", "-c"]
+        args: [
+          "TARGET=$(cat /zap/wrk/target-url); \
+          zap-baseline.py \
+          -t \"$TARGET\" \
+          -r /zap/wrk/zap-report.html \
+          -J /zap/wrk/zap-report.json \
+          -z \"-config globalexcludeurl.url_list.url.regex=.*logout.* -config globalexcludeurl.url_list.url.enabled=true\""
+        ]
+        volumeMounts:
+        - name: zap-config-volume
+          mountPath: /zap/wrk/config
+        - name: zap-target-volume
+          mountPath: /zap/wrk/target-url
+          subPath: target-url
+        - name: zap-report-volume
+          mountPath: /zap/wrk
+      restartPolicy: Never
       volumes:
-        - name: zap-config
-          configMap:
-            name: zap-config
-        - name: zap-reports
-          emptyDir: {}
+      - name: zap-config-volume
+        configMap:
+          name: zap-config
+          items:
+          - key: zap-options
+            path: zap_config.yml
+      - name: zap-target-volume
+        configMap:
+          name: zap-config
+          items:
+          - key: target-url
+            path: target-url
+      - name: zap-report-volume
+        emptyDir: {}
+  backoffLimit: 0

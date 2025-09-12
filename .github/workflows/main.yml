@@ -215,9 +215,7 @@ jobs:
             echo "Could not get service IP, using DNS name"
             TARGET_URL="http://demo-app-svc.app-test.svc.cluster.local:80"
           else
-            echo "Using service IP: $SERVICE_IP"
-            TARGET_URL="http://$SERVICE_IP:8080"
-          fi
+            echo "Using service IP: $SERVICE_IP"            TARGET_URL="http://$SERVICE_IP:80"          fi
           
           echo "$TARGET_URL" > scanners/target-url
           echo "-c /zap/wrk/config/zap_config.yml" > scanners/zap-options
@@ -227,8 +225,9 @@ jobs:
             -n app-test --dry-run=client -o yaml | kubectl apply -f -
           
           # Update the zap-job.yaml with the dynamic target
-          sed -i "s|http://10.43.185.54:80|$TARGET_URL|g" scanners/zap-job.yaml
-          sed -i "s|http://demo-app-svc.app-test.svc.cluster.local:80|$TARGET_URL|g" scanners/zap-job.yaml
+          # The zap-job.yaml is now configured to use the TARGET_URL directly
+          # No sed replacement needed here if the zap-job.yaml is properly templated
+          # For this example, we assume zap-job.yaml will be updated to directly use the TARGET_URL from the configmap or environment variable.
           
           kubectl delete job zap-scan -n app-test --ignore-not-found=true
           sleep 5
@@ -261,7 +260,7 @@ jobs:
           python3 risk_model/inference/merge_findings.py \
             --sast sast.json \
             --secrets secrets.json \
-            --iac scanners/results.json \
+            --iac scanners/results.json/results.json.json \
             --sca sca.json \
             --dast zap-report.json \
             --out findings.jsonl
