@@ -1,6 +1,13 @@
 apiVersion: v1
 kind: Service
-metadata: { name: demo-app-svc, namespace: app-test }
+metadata:
+  name: demo-app-svc
+  namespace: app-test
 spec:
-  selector: { app: demo-app }
-  ports: [{ port: 80, targetPort: 8080 }]
+  selector:
+    app: demo-app
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+  type: ClusterIP

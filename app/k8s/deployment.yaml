@@ -4,7 +4,7 @@ metadata:
   name: demo-app
   namespace: app-test
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: demo-app
@@ -14,35 +14,16 @@ spec:
         app: demo-app
     spec:
       imagePullSecrets:
-        - name: ghcr-secret
+      - name: ghcr-secret
       containers:
-        - name: app
-          image: ghcr.io/hamzi-o/devsecops/app:${IMAGE_TAG}
-          ports:
-            - containerPort: 8080
-          livenessProbe:
-            httpGet:
-              path: /healthz  # Changed from / to /healthz
-              port: 8080
-            initialDelaySeconds: 30
-            timeoutSeconds: 5
-            periodSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /healthz  # Changed from / to /healthz
-              port: 8080
-            initialDelaySeconds: 15
-            timeoutSeconds: 3
-            periodSeconds: 5
-          env:
-            - name: PYTHONUNBUFFERED
-              value: "1"
-            - name: PYTHONDONTWRITEBYTECODE
-              value: "1"
-          resources:
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
+      - name: demo-app
+        image: ghcr.io/YOUR_USERNAME/app:${IMAGE_TAG}
+        ports:
+        - containerPort: 8080
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
