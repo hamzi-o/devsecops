@@ -1,19 +1,31 @@
-env:
-  contexts:
-    - name: "default-context"
-      urls:
-        - "http://demo-app-svc.app-test.svc.cluster.local:80"
-      includePaths: []
-      excludePaths: []
-  authentication:
-    method: "none"
-jobs:
-  - type: "spider"
-    parameters:
-      maxDepth: 2
-      maxDuration: 10
-  - type: "passiveScan"
-  - type: "activeScan"
-    parameters:
-      policy: "Default Policy"
-      maxDuration: 15
+--- # ZAP Baseline Scan Configuration
+# This is a minimal configuration for a ZAP baseline scan.
+# For more advanced configurations, refer to the ZAP documentation.
+
+# Active Scan (optional, can be removed for baseline only)
+# ascan:
+#   scanners:
+#     - 1 # SQL Injection
+#     - 2 # Cross Site Scripting
+
+# Spider (required for baseline scan to discover URLs)
+spider:
+  maxDepth: 5
+  maxChildren: 0
+  parseComments: true
+  parseRobotsTxt: true
+  parseSitemapXml: true
+  acceptCookies: true
+  handleParameters: 0 # 0: Use all, 1: Ignore all, 2: Ignore value, 3: Ignore value and add once
+
+# Ajax Spider (optional, for modern web applications)
+# ajaxSpider:
+#   enabled: true
+#   maxDuration: 5 # minutes
+
+# Reporter
+reporter:
+  format: JSON
+  template: traditionalhtml
+  reportDir: /zap/wrk/
+  reportName: zap-report

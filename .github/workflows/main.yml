@@ -174,13 +174,35 @@ jobs:
           kubectl get service demo-app-svc -n app-test
           kubectl get ingress -n app-test
           kubectl describe ingress demo-app-ing -n app-test
+          
+          # Add a robust wait for the application to be truly accessible
+          echo "Waiting for application to be accessible via service..."
+          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath=\"{.spec.clusterIP}\")
+          SERVICE_DNS="demo-app-svc.app-test.svc.cluster.local"
+          
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null -w \"%{http_code}\" http://$SERVICE_IP:80 | grep \"200\"; then
+              echo "Application accessible via service IP: $SERVICE_IP:80"
+              break
+            elif curl -s -o /dev/null -w \"%{http_code}\" http://$SERVICE_DNS:80 | grep \"200\"; then
+              echo "Application accessible via service DNS: $SERVICE_DNS:80"
+              break
+            else
+              echo "Attempt $i: Application not yet accessible. Retrying in 5 seconds..."
+              sleep 5
+            fi
+            if [ $i -eq 30 ]; then
+              echo "Application did not become accessible within timeout."
+              exit 1
+            fi
+          done
 
       - name: Test internal connectivity before ZAP
         run: |
           export KUBECONFIG=kubeconfig
           
           # Get the service IP
-          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath='{.spec.clusterIP}')
+          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath=\"{.spec.clusterIP}\")
           echo "Service IP: $SERVICE_IP"
           
           # Check if pods are running
@@ -197,11 +219,11 @@ jobs:
           
           # Test connectivity from within cluster
           echo "=== Testing Internal Connectivity ==="
-          kubectl run test-connectivity --image=curlimages/curl:latest --rm -i --restart=Never -n app-test -- sh -c "
-            echo 'Testing service IP: $SERVICE_IP:80'
-            curl -v --connect-timeout 10 --max-time 30 http://$SERVICE_IP:80 || echo 'Service IP failed'
-            echo 'Testing service DNS:'
-            curl -v --connect-timeout 10 --max-time 30 http://demo-app-svc.app-test.svc.cluster.local:80 || echo 'Service DNS failed'
+          kubectl run test-connectivity --image=curlimages/curl:latest --rm -i --restart=Never -n app-test -- sh -c "\
+            echo 'Testing service IP: $SERVICE_IP:80'; \
+            curl -v --connect-timeout 10 --max-time 30 http://$SERVICE_IP:80 || echo 'Service IP failed'; \
+            echo 'Testing service DNS:'; \
+            curl -v --connect-timeout 10 --max-time 30 http://demo-app-svc.app-test.svc.cluster.local:80 || echo 'Service DNS failed'; \
           " || echo "Connectivity test failed"
 
       - name: Create ZAP ConfigMap and Job YAML
@@ -215,7 +237,9 @@ jobs:
             echo "Could not get service IP, using DNS name"
             TARGET_URL="http://demo-app-svc.app-test.svc.cluster.local:80"
           else
-            echo "Using service IP: $SERVICE_IP"            TARGET_URL="http://$SERVICE_IP:80"          fi
+            echo "Using service IP: $SERVICE_IP"
+            TARGET_URL="http://$SERVICE_IP:80"
+          fi
           
           echo "$TARGET_URL" > scanners/target-url
           echo "-c /zap/wrk/config/zap_config.yml" > scanners/zap-options
