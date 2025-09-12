@@ -4,30 +4,23 @@ metadata:
   name: zap-scan
   namespace: app-test
 spec:
-  backoffLimit: 1
-  # auto-clean finished Job resources after 1 day (seconds)
-  ttlSecondsAfterFinished: 86400
-  # fail the Job if it runs longer than 45 minutes (2700s)
-  activeDeadlineSeconds: 2700
+  backoffLimit: 0
   template:
     spec:
+      restartPolicy: Never
       containers:
         - name: zap
-          image: owasp/zap2docker-stable:2.15.0
-          # keep your existing invocation which reads the config file
-          command: ["zap.sh", "-cmd", "-config", "/zap/wrk/zap_config.yaml"]
-          # ensure ZAP writes reports to /zap/wrk so workflow can kubectl cp them
+          image: ghcr.io/zaproxy/zaproxy:2.15.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              TARGET=$(cat /zap-config/target-url)
+              OPTIONS=$(cat /zap-config/zap-options)
+              zap-baseline.py -t "$TARGET" -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json $OPTIONS || true
           volumeMounts:
             - name: zap-config
-              mountPath: /zap/wrk
-          resources:
-            requests:
-              memory: "512Mi"
-              cpu: "250m"
-            limits:
-              memory: "2Gi"
-              cpu: "1"
-      restartPolicy: Never
+              mountPath: /zap-config
       volumes:
         - name: zap-config
           configMap:

@@ -4,23 +4,5 @@ metadata:
   name: zap-config
   namespace: app-test
 data:
-  zap_config.yaml: |
-    env:
-      contexts:
-        - name: "default-context"
-          urls:
-            - "http://demo-app-svc.app-test.svc.cluster.local:80"
-          includePaths: []
-          excludePaths: []
-      authentication:
-        method: "none"
-    jobs:
-      - type: "spider"
-        parameters:
-          maxDepth: 2
-          maxDuration: 10
-      - type: "passiveScan"
-      - type: "activeScan"
-        parameters:
-          policy: "Default Policy"
-          maxDuration: 15
+  target-url: "http://206.189.27.183:30080"  # NodePort IP of your k3s node
+  zap-options: "-config api.disablekey=true"

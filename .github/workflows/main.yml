@@ -62,7 +62,6 @@ jobs:
             echo "Please review pip check output for potential issues."
           }
           deactivate
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -102,7 +101,6 @@ jobs:
           sed -i "s|\${IMAGE_TAG}|$GIT_SHA|g" app/k8s/deployment.yaml
           echo "=== Updated deployment.yaml ==="
           cat app/k8s/deployment.yaml
-
       - name: Deploy app to k3s
         run: |
           echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
@@ -162,12 +160,10 @@ jobs:
           
           echo "=== Deployment Successful ==="
           kubectl get pods -n app-test -l app=demo-app
-
       - name: Clear runner cache
         run: |
           rm -rf $HOME/.local/bin/*
           rm -rf $HOME/.cache/*
-
       - name: Install local scanners
         continue-on-error: true
         env:
@@ -195,7 +191,6 @@ jobs:
           rm -f conftest.tar.gz
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-
       - name: Verify scanner installation
         continue-on-error: true
         run: |
@@ -211,7 +206,6 @@ jobs:
           syft --version || { echo "Syft installation failed"; exit 1; }
           conftest --version || true
           gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
-
       - name: Run SAST scan
         continue-on-error: true
         run: |
@@ -219,16 +213,11 @@ jobs:
           source venv/bin/activate
           semgrep --config scanners/semgrep_rules.yml --json > sast.json || echo "[]" > sast.json
           deactivate
-
       - name: Run Secrets scan
         continue-on-error: true
         run: |
           export PATH=$HOME/.local/bin:$PATH
           gitleaks detect --source . --report-path secrets.json || echo "[]" > secrets.json
-
-      # -------------------------------
-      # Run IaC scan (Checkov) - only changed output path
-      # -------------------------------
       - name: Run IaC scan
         continue-on-error: true
         run: |
@@ -243,7 +232,6 @@ jobs:
           checkov -d app/k8s --config-file scanners/checkov.yml --output json --output-file-path scanners/results.json 2> checkov_error.log || \
             printf '{"results": {"failed_checks": [], "passed_checks": [], "skipped_checks": []}}' > scanners/results.json
           deactivate
-
       - name: Run SCA scan
         continue-on-error: true
         run: |
@@ -253,13 +241,11 @@ jobs:
           else
             docker run --rm -v $(pwd):/workspace -w /workspace aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo "[]" > sca.json
           fi
-
       - name: Generate SBOM
         continue-on-error: true
         run: |
           export PATH=$HOME/.local/bin:$PATH
           syft dir:app -o json > sbom.json || echo "[]" > sbom.json
-
       - name: Wait for service to be ready
         run: |
           export KUBECONFIG=kubeconfig
@@ -267,17 +253,15 @@ jobs:
           kubectl get service demo-app-svc -n app-test
           kubectl get ingress -n app-test
           kubectl describe ingress demo-app-ing -n app-test
-
       - name: Create ZAP ConfigMap and Job YAML
         run: |
           export KUBECONFIG=kubeconfig
           mkdir -p scanners
           # Use existing zap_config.yml and zap-job.yaml from repo
           kubectl create configmap zap-config \
-            --from-file=zap_config.yaml=scanners/zap_config.yml \
+            --from-file=zap_config.yaml=scanners/zap-config.yaml \
             -n app-test --dry-run=client -o yaml | kubectl apply -f -
           kubectl apply -f scanners/zap-job.yaml
-
       - name: DAST scan with OWASP ZAP
         continue-on-error: true
         run: |
@@ -298,7 +282,6 @@ jobs:
             echo '{"site": []}' > zap-report.json
             echo "<html><body>No ZAP report generated</body></html>" > zap-report.html
           }
-
           POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
           if [ ! -z "$POD_NAME" ]; then
             echo "Copying ZAP reports from pod: $POD_NAME"
@@ -317,21 +300,19 @@ jobs:
             echo '{"site": []}' > zap-report.json
             echo "<html><body>No ZAP report generated</body></html>" > zap-report.html
           fi
-
       - name: Merge findings
         run: |
           source venv/bin/activate
           python3 risk_model/inference/merge_findings.py \
             --sast sast.json \
             --secrets secrets.json \
-            --iac scanners/results.json \
+            --iac scanners/results.json/results.json.json \
             --sca sca.json \
             --dast zap-report.json \
             --out findings.jsonl
           deactivate
           echo "Debug: Merged Findings"
           cat findings.jsonl || echo "No findings.jsonl found"
-
       - name: AI inference + HTML report
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -349,7 +330,6 @@ jobs:
           cat enriched.jsonl || echo "No enriched.jsonl found"
           echo "Debug: Report"
           cat report.html || echo "No report.html found"
-
       - name: Evaluate adaptive gate
         id: gate
         run: |
@@ -359,7 +339,6 @@ jobs:
           echo "threshold=$THRESHOLD" >> $GITHUB_OUTPUT
           echo "Adaptive threshold set to: $THRESHOLD"
           deactivate
-
       - name: Check gate
         env:
           THRESH: ${{ steps.gate.outputs.threshold }}
@@ -367,7 +346,6 @@ jobs:
           source venv/bin/activate
           python3 adaptive/check_gate.py
           deactivate
-
       - name: Run Red Team tests
         continue-on-error: true
         run: |
@@ -376,7 +354,6 @@ jobs:
           TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "staging.hamza-builds.info")
           python3 redteam/run_attacks.py --target http://$TARGET_HOST:80 --out redteam_results.json || echo "[]" > redteam_results.json
           deactivate
-
       - name: Verify App Accessibility
         continue-on-error: true
         run: |
@@ -389,7 +366,6 @@ jobs:
               exit 0
             }
           }
-
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         if: always()
@@ -408,7 +384,6 @@ jobs:
             sca.json
             sbom.json
             gate.json
-
       - name: Clean up kubeconfig
         if: always()
         run: |

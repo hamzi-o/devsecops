@@ -1,0 +1,28 @@
+env:
+  contexts:
+    - name: "default-context"
+      urls:
+        - "http://206.189.27.183:30080"  # Replace with your k3s node IP
+      includePaths: []
+      excludePaths: []
+  authentication:
+    method: "none"
+
+jobs:
+  - type: "spider"
+    parameters:
+      maxDepth: 2
+      maxDuration: 10
+
+  - type: "passiveScan"
+
+  - type: "activeScan"
+    parameters:
+      policy: "Default Policy"
+
+output:
+  reports:
+    - format: "JSON"
+      file: "/zap/wrk/zap-report.json"
+    - format: "HTML"
+      file: "/zap/wrk/zap-report.html"
