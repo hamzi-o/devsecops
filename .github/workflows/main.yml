@@ -1,472 +1,505 @@
 name: DevSecOps Pipeline
-on:
-  push:
-    branches: ["main"]
-  pull_request:
-    branches: ["main"]
+     on:
+       push:
+         branches: ["main"]
+       pull_request:
+         branches: ["main"]
 
-jobs:
-  build-deploy-scan:
-    runs-on: self-hosted
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+     jobs:
+       build-deploy-scan:
+         runs-on: self-hosted
+         steps:
+           - name: Checkout
+             uses: actions/checkout@v4
 
-      - name: Cache Python dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+           - name: Cache Python dependencies
+             uses: actions/cache@v4
+             with:
+               path: ~/.cache/pip
+               key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
 
-      - name: Set up Python virtual environment
-        run: |
-          python3 -m venv venv
-          source venv/bin/activate
-          pip install --upgrade pip
-          echo "=== Clearing pip cache to ensure fresh dependency installation ==="
-          rm -rf ~/.cache/pip/*
-          pip install -r requirements.txt
-          echo "=== Ensuring httpx==0.27.2 for openai compatibility ==="
-          pip install httpx==0.27.2
-          echo "=== Installing openai==1.51.0 ==="
-          pip install openai==1.51.0
-          echo "=== Verifying installed packages ==="
-          pip list
-          echo "=== Checking openai version ==="
-          python3 -c "import openai; print(openai.__version__)" || {
-            echo "Failed to import openai. Ensuring httpx and reinstalling openai==1.51.0."
-            pip install httpx==0.27.2
-            pip install openai==1.51.0
-            python3 -c "import openai; print(openai.__version__)"
-          }
-          echo "=== Checking httpx version ==="
-          python3 -c "import httpx; print(httpx.__version__)" || {
-            echo "httpx not found, installing httpx==0.27.2."
-            pip install httpx==0.27.2
-            python3 -c "import httpx; print(httpx.__version__)"
-          }
-          echo "=== Checking checkov version ==="
-          checkov --version || {
-            echo "Failed to verify checkov version. Reinstalling checkov==3.2.258."
-            pip install checkov==3.2.258
-            checkov --version
-          }
-          echo "=== Checking OpenAI class import ==="
-          python3 -c "from openai import OpenAI; print('OpenAI import successful')" || {
-            echo "OpenAI class import failed."
-            exit 1
-          }
-          echo "=== Checking for dependency conflicts ==="
-          pip check || {
-            echo "Dependency conflicts detected, continuing with warning."
-            echo "Please review pip check output for potential issues."
-          }
-          deactivate
+           - name: Set up Python virtual environment
+             run: |
+               python3 -m venv venv
+               source venv/bin/activate
+               pip install --upgrade pip
+               echo "=== Clearing pip cache to ensure fresh dependency installation ==="
+               rm -rf ~/.cache/pip/*
+               pip install -r requirements.txt
+               echo "=== Ensuring httpx==0.27.2 for openai compatibility ==="
+               pip install httpx==0.27.2
+               echo "=== Installing openai==1.51.0 ==="
+               pip install openai==1.51.0
+               echo "=== Verifying installed packages ==="
+               pip list
+               echo "=== Checking openai version ==="
+               python3 -c "import openai; print(openai.__version__)" || {
+                 echo "Failed to import openai. Ensuring httpx and reinstalling openai==1.51.0."
+                 pip install httpx==0.27.2
+                 pip install openai==1.51.0
+                 python3 -c "import openai; print(openai.__version__)"
+               }
+               echo "=== Checking httpx version ==="
+               python3 -c "import httpx; print(httpx.__version__)" || {
+                 echo "httpx not found, installing httpx==0.27.2."
+                 pip install httpx==0.27.2
+                 python3 -c "import httpx; print(httpx.__version__)"
+               }
+               echo "=== Checking checkov version ==="
+               checkov --version || {
+                 echo "Failed to verify checkov version. Reinstalling checkov==3.2.258."
+                 pip install checkov==3.2.258
+                 checkov --version
+               }
+               echo "=== Checking OpenAI class import ==="
+               python3 -c "from openai import OpenAI; print('OpenAI import successful')" || {
+                 echo "OpenAI class import failed."
+                 exit 1
+               }
+               echo "=== Checking for dependency conflicts ==="
+               pip check || {
+                 echo "Dependency conflicts detected, continuing with warning."
+                 echo "Please review pip check output for potential issues."
+               }
+               deactivate
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+           - name: Set up Docker Buildx
+             uses: docker/setup-buildx-action@v3
 
-      - name: Bootstrap builder
-        run: docker buildx inspect --bootstrap
+           - name: Bootstrap builder
+             run: docker buildx inspect --bootstrap
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ secrets.GHCR_USERNAME }}
-          password: ${{ secrets.GHCR_TOKEN }}
+           - name: Login to GHCR
+             uses: docker/login-action@v3
+             with:
+               registry: ghcr.io
+               username: ${{ secrets.GHCR_USERNAME }}
+               password: ${{ secrets.GHCR_TOKEN }}
 
-      - name: Build & push Docker image
-        id: meta
-        run: |
-          GIT_SHA=$(git rev-parse --short HEAD)
-          echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
-          echo "Building image: ${{ secrets.REGISTRY }}/app:$GIT_SHA"
-          docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest app
-          if [ $? -ne 0 ]; then
-            echo "Docker build failed"
-            exit 1
-          fi
-          echo "Pushing image: ${{ secrets.REGISTRY }}/app:$GIT_SHA"
-          docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
-          if [ $? -ne 0 ]; then
-            echo "Docker push failed for tag $GIT_SHA"
-            exit 1
-          fi
-          echo "Pushing image: ${{ secrets.REGISTRY }}/app:latest"
-          docker push ${{ secrets.REGISTRY }}/app:latest
-          if [ $? -ne 0 ]; then
-            echo "Docker push failed for tag latest"
-            exit 1
-          fi
-          sed -i "s|\${IMAGE_TAG}|$GIT_SHA|g" app/k8s/deployment.yaml
-          echo "=== Updated deployment.yaml ==="
-          cat app/k8s/deployment.yaml
+           - name: Build & push Docker image
+             id: meta
+             run: |
+               GIT_SHA=$(git rev-parse --short HEAD)
+               echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
+               echo "Building image: ${{ secrets.REGISTRY }}/app:$GIT_SHA"
+               docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest app
+               if [ $? -ne 0 ]; then
+                 echo "Docker build failed"
+                 exit 1
+               fi
+               echo "Pushing image: ${{ secrets.REGISTRY }}/app:$GIT_SHA"
+               docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
+               if [ $? -ne 0 ]; then
+                 echo "Docker push failed for tag $GIT_SHA"
+                 exit 1
+               fi
+               echo "Pushing image: ${{ secrets.REGISTRY }}/app:latest"
+               docker push ${{ secrets.REGISTRY }}/app:latest
+               if [ $? -ne 0 ]; then
+                 echo "Docker push failed for tag latest"
+                 exit 1
+               fi
+               sed -i "s|\${IMAGE_TAG}|$GIT_SHA|g" app/k8s/deployment.yaml
+               echo "=== Updated deployment.yaml ==="
+               cat app/k8s/deployment.yaml
 
-      - name: Deploy app to k3s
-        run: |
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
-          chmod 600 kubeconfig
-          export KUBECONFIG=kubeconfig
-          
-          # Apply namespace first
-          kubectl apply -f app/k8s/namespace.yaml
-          
-          # Create image pull secret for GHCR
-          kubectl create secret docker-registry ghcr-secret \
-            --docker-server=ghcr.io \
-            --docker-username=${{ secrets.GHCR_USERNAME }} \
-            --docker-password=${{ secrets.GHCR_TOKEN }} \
-            --namespace=app-test \
-            --dry-run=client -o yaml | kubectl apply -f -
-          
-          # Apply other manifests
-          kubectl apply -f app/k8s/deployment.yaml
-          echo "=== Deployment YAML ==="
-          cat app/k8s/deployment.yaml
-          kubectl apply -f app/k8s/service.yaml
-          kubectl apply -f app/k8s/ingress.yaml
-          kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
-          kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
-          
-          # Wait a moment for pods to start
-          sleep 10
-          
-          # Debug information
-          echo "=== Deployment Status ==="
-          kubectl get deployment demo-app -n app-test -o wide
-          echo "=== Pod Status ==="
-          kubectl get pods -n app-test -o wide
-          echo "=== Pod Descriptions ==="
-          kubectl describe pods -n app-test -l app=demo-app
-          echo "=== Recent Events ==="
-          kubectl get events -n app-test --sort-by='.lastTimestamp' | tail -10
-          echo "=== Ingress Debug ==="
-          kubectl describe ingress demo-app-ing -n app-test
-          
-          # Wait for rollout with extended timeout and better error handling
-          if ! kubectl rollout status -n app-test deploy/demo-app --timeout=600s; then
-            echo "=== DEPLOYMENT FAILED - DETAILED DEBUG INFO ==="
-            echo "=== Deployment Description ==="
-            kubectl describe deployment demo-app -n app-test
-            echo "=== Pod Descriptions ==="
-            kubectl describe pods -n app-test -l app=demo-app
-            echo "=== Pod Logs ==="
-            kubectl logs -n app-test -l app=demo-app --tail=50 --all-containers=true --previous=false || true
-            echo "=== Previous Pod Logs (if any) ==="
-            kubectl logs -n app-test -l app=demo-app --tail=20 --all-containers=true --previous=true || true
-            echo "=== All Events ==="
-            kubectl get events -n app-test --sort-by='.lastTimestamp'
-            exit 1
-          fi
-          
-          echo "=== Deployment Successful ==="
-          kubectl get pods -n app-test -l app=demo-app
+           - name: Deploy app to k3s
+             run: |
+               echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
+               chmod 600 kubeconfig
+               export KUBECONFIG=kubeconfig
+               
+               # Apply namespace first
+               kubectl apply -f app/k8s/namespace.yaml
+               
+               # Create image pull secret for GHCR
+               kubectl create secret docker-registry ghcr-secret \
+                 --docker-server=ghcr.io \
+                 --docker-username=${{ secrets.GHCR_USERNAME }} \
+                 --docker-password=${{ secrets.GHCR_TOKEN }} \
+                 --namespace=app-test \
+                 --dry-run=client -o yaml | kubectl apply -f -
+               
+               # Apply other manifests
+               kubectl apply -f app/k8s/deployment.yaml
+               echo "=== Deployment YAML ==="
+               cat app/k8s/deployment.yaml
+               kubectl apply -f app/k8s/service.yaml
+               kubectl apply -f app/k8s/ingress.yaml
+               kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
+               kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
+               
+               # Wait a moment for pods to start
+               sleep 10
+               
+               # Debug information
+               echo "=== Deployment Status ==="
+               kubectl get deployment demo-app -n app-test -o wide
+               echo "=== Pod Status ==="
+               kubectl get pods -n app-test -o wide
+               echo "=== Pod Descriptions ==="
+               kubectl describe pods -n app-test -l app=demo-app
+               echo "=== Recent Events ==="
+               kubectl get events -n app-test --sort-by='.lastTimestamp' | tail -10
+               echo "=== Ingress Debug ==="
+               kubectl describe ingress demo-app-ing -n app-test
+               
+               # Wait for rollout with extended timeout and better error handling
+               if ! kubectl rollout status -n app-test deploy/demo-app --timeout=600s; then
+                 echo "=== DEPLOYMENT FAILED - DETAILED DEBUG INFO ==="
+                 echo "=== Deployment Description ==="
+                 kubectl describe deployment demo-app -n app-test
+                 echo "=== Pod Descriptions ==="
+                 kubectl describe pods -n app-test -l app=demo-app
+                 echo "=== Pod Logs ==="
+                 kubectl logs -n app-test -l app=demo-app --tail=50 --all-containers=true --previous=false || true
+                 echo "=== Previous Pod Logs (if any) ==="
+                 kubectl logs -n app-test -l app=demo-app --tail=20 --all-containers=true --previous=true || true
+                 echo "=== All Events ==="
+                 kubectl get events -n app-test --sort-by='.lastTimestamp'
+                 exit 1
+               fi
+               
+               echo "=== Deployment Successful ==="
+               kubectl get pods -n app-test -l app=demo-app
 
-      - name: Clear runner cache
-        run: |
-          rm -rf $HOME/.local/bin/*
-          rm -rf $HOME/.cache/*
+           - name: Clear runner cache
+             run: |
+               rm -rf $HOME/.local/bin/*
+               rm -rf $HOME/.cache/*
 
-      - name: Install local scanners
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p $HOME/.local/bin
-          export PATH=$HOME/.local/bin:$PATH
-          
-          # Install OWASP ZAP
-          ZAP_VERSION="2.15.0"
-          echo "Installing OWASP ZAP v$ZAP_VERSION..."
-          wget https://github.com/zaproxy/zaproxy/releases/download/v$ZAP_VERSION/ZAP_${ZAP_VERSION}_Linux.tar.gz -O zap.tar.gz
-          tar -xzf zap.tar.gz -C $HOME/.local/bin
-          mv $HOME/.local/bin/ZAP_${ZAP_VERSION} $HOME/.local/bin/zap
-          rm -f zap.tar.gz
-          
-          # Install Trivy
-          TRIVY_VERSION="0.66.0"
-          echo "Installing Trivy v$TRIVY_VERSION..."
-          curl -L https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz -o trivy.tar.gz
-          tar -xzf trivy.tar.gz -C $HOME/.local/bin
-          if [ $? -eq 0 ]; then
-            chmod +x $HOME/.local/bin/trivy
-            $HOME/.local/bin/trivy --version && echo "Trivy binary is functional" || {
-              echo "Trivy binary not functional, falling back to Docker image for SCA scan"
-              echo "trivy_docker_fallback=true" >> $GITHUB_ENV
-            }
-          else
-            echo "Trivy installation failed, falling back to Docker image for SCA scan"
-            echo "trivy_docker_fallback=true" >> $GITHUB_ENV
-          fi
-          rm -f trivy.tar.gz
-          
-          # Install other security scanners
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
-          curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
-          
-          # Add to PATH for this session
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+           - name: Install local scanners
+             continue-on-error: true
+             env:
+               GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+             run: |
+               mkdir -p $HOME/.local/bin
+               export PATH=$HOME/.local/bin:$PATH
+               
+               # Install OWASP ZAP
+               ZAP_VERSION="2.15.0"
+               echo "Installing OWASP ZAP v$ZAP_VERSION..."
+               wget https://github.com/zaproxy/zaproxy/releases/download/v$ZAP_VERSION/ZAP_${ZAP_VERSION}_Linux.tar.gz -O zap.tar.gz
+               tar -xzf zap.tar.gz -C $HOME/.local/bin
+               mv $HOME/.local/bin/ZAP_${ZAP_VERSION} $HOME/.local/bin/zap
+               rm -f zap.tar.gz
+               
+               # Install Trivy
+               TRIVY_VERSION="0.66.0"
+               echo "Installing Trivy v$TRIVY_VERSION..."
+               curl -L https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz -o trivy.tar.gz
+               tar -xzf trivy.tar.gz -C $HOME/.local/bin
+               if [ $? -eq 0 ]; then
+                 chmod +x $HOME/.local/bin/trivy
+                 $HOME/.local/bin/trivy --version && echo "Trivy binary is functional" || {
+                   echo "Trivy binary not functional, falling back to Docker image for SCA scan"
+                   echo "trivy_docker_fallback=true" >> $GITHUB_ENV
+                 }
+               else
+                 echo "Trivy installation failed, falling back to Docker image for SCA scan"
+                 echo "trivy_docker_fallback=true" >> $GITHUB_ENV
+               fi
+               rm -f trivy.tar.gz
+               
+               # Install other security scanners
+               curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
+               curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
+               curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
+               
+               # Add to PATH for this session
+               echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Verify scanner installation
-        continue-on-error: true
-        run: |
-          export PATH=$HOME/.local/bin:$PATH
-          source venv/bin/activate
-          echo "=== Scanner Versions ==="
-          semgrep --version || { echo "Semgrep installation failed"; exit 1; }
-          checkov --version || { echo "Checkov installation failed"; exit 1; }
-          $HOME/.local/bin/zap/zap.sh -version || { echo "OWASP ZAP installation failed"; exit 1; }
-          deactivate
-          if [ "${{ env.trivy_docker_fallback }}" != "true" ]; then
-            trivy --version || echo "Trivy binary not installed, using Docker fallback"
-            echo "trivy_docker_fallback=true" >> $GITHUB_ENV
-          else
-            echo "Trivy binary not installed, using Docker image for SCA scan"
-          fi
-          syft --version || { echo "Syft installation failed"; exit 1; }
-          conftest --version || true
-          gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
+           - name: Verify scanner installation
+             continue-on-error: true
+             run: |
+               export PATH=$HOME/.local/bin:$PATH
+               source venv/bin/activate
+               echo "=== Scanner Versions ==="
+               semgrep --version || { echo "Semgrep installation failed"; exit 1; }
+               checkov --version || { echo "Checkov installation failed"; exit 1; }
+               $HOME/.local/bin/zap/zap.sh -version || { echo "OWASP ZAP installation failed"; exit 1; }
+               deactivate
+               if [ "${{ env.trivy_docker_fallback }}" != "true" ]; then
+                 trivy --version || echo "Trivy binary not installed, using Docker fallback"
+                 echo "trivy_docker_fallback=true" >> $GITHUB_ENV
+               else
+                 echo "Trivy binary not installed, using Docker image for SCA scan"
+               fi
+               syft --version || { echo "Syft installation failed"; exit 1; }
+               conftest --version || true
+               gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
 
-      - name: Run SAST scan
-        continue-on-error: true
-        run: |
-          export PATH=$HOME/.local/bin:$PATH
-          source venv/bin/activate
-          semgrep --config scanners/semgrep_rules.yml --json > sast.json || echo "[]" > sast.json
-          deactivate
+           - name: Run SAST scan
+             continue-on-error: true
+             run: |
+               export PATH=$HOME/.local/bin:$PATH
+               source venv/bin/activate
+               semgrep --config scanners/semgrep_rules.yml --json > sast.json || echo "[]" > sast.json
+               deactivate
 
-      - name: Run Secrets scan
-        continue-on-error: true
-        run: |
-          export PATH=$HOME/.local/bin:$PATH
-          gitleaks detect --source . --report-path secrets.json || echo "[]"> secrets.json
+           - name: Run Secrets scan
+             continue-on-error: true
+             run: |
+               export PATH=$HOME/.local/bin:$PATH
+               gitleaks detect --source . --report-path secrets.json || echo "[]"> secrets.json
 
-      - name: Run IaC scan
-        continue-on-error: true
-        run: |
-          export PATH=$HOME/.local/bin:$PATH
-          source venv/bin/activate
-          echo "=== Checking app/k8s directory ==="
-          ls -l app/k8s || echo "app/k8s directory not found or empty"
-          if [ -d app/k8s ] && [ "$(ls -A app/k8s)" ]; then
-            echo "Running Checkov on app/k8s..."
-            if [ -f "./scanners/checkov.yml" ]; then
-              echo "Using checkov.yml config file"
-              checkov -d app/k8s --output json -f scanners/checkov.yml > iac.json 2> checkov_error.log || {
-                echo "Checkov scan failed, creating empty results"
-                echo '{"results": []}' > iac.json
-                echo "=== Checkov Error Log ==="
-                cat checkov_error.log
-              }
-            else
-              echo "checkov.yml not found, running Checkov without config"
-              checkov -d app/k8s --output json > iac.json 2> checkov_error.log || {
-                echo "Checkov scan failed, creating empty results"
-                echo '{"results": []}' > iac.json
-                echo "=== Checkov Error Log ==="
-                cat checkov_error.log
-              }
-            fi
-          else
-            echo "No valid IaC files found in app/k8s, creating empty results"
-            echo '{"results": []}' > iac.json
-          fi
-          cat iac.json
-          deactivate
+           - name: Run IaC scan
+             continue-on-error: true
+             run: |
+               export PATH=$HOME/.local/bin:$PATH
+               source venv/bin/activate
+               echo "=== Checking app/k8s directory ==="
+               ls -l app/k8s || echo "app/k8s directory not found or empty"
+               if [ -d app/k8s ] && [ "$(ls -A app/k8s)" ]; then
+                 echo "Running Checkov on app/k8s..."
+                 checkov -d app/k8s --config-file checkov.yml --output json --output-file-path checkov-report.json || {
+                   echo "Checkov scan failed, creating empty results"
+                   echo '{"results": []}' > checkov-report.json
+                   echo "=== Checkov Error Log ==="
+                   cat checkov_error.log
+                 }
+               else
+                 echo "No valid IaC files found in app/k8s, creating empty results"
+                 echo '{"results": []}' > checkov-report.json
+               fi
+               cat checkov-report.json
+               deactivate
 
-      - name: Run SCA scan
-        continue-on-error: true
-        run: |
-          export PATH=$HOME/.local/bin:$PATH
-          if [ "${{ env.trivy_docker_fallback }}" != "true" ]; then
-            echo "Running Trivy SCA scan using binary..."
-            trivy fs --format json --output sca.json . || echo "[]" > sca.json
-          else
-            echo "Running Trivy SCA scan using Docker image..."
-            docker run --rm -v $(pwd):/workspace -w /workspace aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo "[]" > sca.json
-          fi
+           - name: Run SCA scan
+             continue-on-error: true
+             run: |
+               export PATH=$HOME/.local/bin:$PATH
+               if [ "${{ env.trivy_docker_fallback }}" != "true" ]; then
+                 echo "Running Trivy SCA scan using binary..."
+                 trivy fs --format json --output sca.json . || echo "[]" > sca.json
+               else
+                 echo "Running Trivy SCA scan using Docker image..."
+                 docker run --rm -v $(pwd):/workspace -w /workspace aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo "[]" > sca.json
+               fi
 
-      - name: Generate SBOM
-        continue-on-error: true
-        run: |
-          export PATH=$HOME/.local/bin:$PATH
-          syft dir:app -o json > sbom.json || echo "[]" > sbom.json
+           - name: Generate SBOM
+             continue-on-error: true
+             run: |
+               export PATH=$HOME/.local/bin:$PATH
+               syft dir:app -o json > sbom.json || echo "[]" > sbom.json
 
-      - name: Wait for service to be ready
-        run: |
-          export KUBECONFIG=kubeconfig
-          echo "=== Waiting for service to be ready ==="
-          kubectl wait --for=condition=ready pod -n app-test -l app=demo-app --timeout=300s
-          
-          # Get service endpoint
-          kubectl get service demo-app-svc -n app-test
-          kubectl get ingress -n app-test
-          echo "=== Ingress Debug ==="
-          kubectl describe ingress demo-app-ing -n app-test
+           - name: Wait for service to be ready
+             run: |
+               export KUBECONFIG=kubeconfig
+               echo "=== Waiting for service to be ready ==="
+               kubectl wait --for=condition=ready pod -n app-test -l app=demo-app --timeout=300s
+               
+               # Get service endpoint
+               kubectl get service demo-app-svc -n app-test
+               kubectl get ingress -n app-test
+               echo "=== Ingress Debug ==="
+               kubectl describe ingress demo-app-ing -n app-test
 
-      - name: DAST scan with OWASP ZAP
-        continue-on-error: true
-        run: |
-          export PATH=$HOME/.local/bin:$PATH
-          export KUBECONFIG=kubeconfig
-          
-          # Try to get target host from ingress
-          TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
-          
-          if [ -z "$TARGET_HOST" ]; then
-            # Fallback to service ClusterIP
-            TARGET_HOST=$(kubectl get service demo-app-svc -n app-test -o jsonpath='{.spec.clusterIP}')
-            echo "Using ClusterIP: $TARGET_HOST"
-          fi
-          
-          # Final fallback to STAGING_HOST variable
-          if [ -z "$TARGET_HOST" ]; then
-            TARGET_HOST=${{ vars.STAGING_HOST }}
-            echo "Using STAGING_HOST variable: $TARGET_HOST"
-          fi
-          
-          if [ -n "$TARGET_HOST" ]; then
-            echo "Running OWASP ZAP scan on http://$TARGET_HOST:8080"
-            if [ -f "./scanners/zap_config.yml" ]; then
-              $HOME/.local/bin/zap/zap.sh -cmd -quickurl http://$TARGET_HOST:8080 -quickout zap.json -configfile ./scanners/zap_config.yml || {
-                echo "OWASP ZAP scan failed, creating empty results"
-                echo "[]" > zap.json
-              }
-            else
-              echo "zap_config.yml not found, running ZAP without config"
-              $HOME/.local/bin/zap/zap.sh -cmd -quickurl http://$TARGET_HOST:8080 -quickout zap.json || {
-                echo "OWASP ZAP scan failed, creating empty results"
-                echo "[]" > zap.json
-              }
-            fi
-          else
-            echo "No valid target host found, skipping DAST scan"
-            echo "[]" > zap.json
-          fi
-          cat zap.json
+           - name: DAST scan with OWASP ZAP
+             continue-on-error: true
+             run: |
+               export PATH=$HOME/.local/bin:$PATH
+               export KUBECONFIG=kubeconfig
+               cat > zap-config-cm.yaml << 'EOF'
+               apiVersion: v1
+               kind: ConfigMap
+               metadata:
+                 name: zap-config
+                 namespace: app-test
+               data:
+                 zap_config.yml: |
+                   env:
+                     contexts:
+                       - name: "default-context"
+                         urls:
+                           - "http://demo-app-svc.app-test.svc.cluster.local:8080"
+                         includePaths: []
+                         excludePaths: []
+                     authentication:
+                       method: "none"
+                   jobs:
+                     - type: "spider"
+                       parameters:
+                         maxDepth: 5
+                         maxDuration: 10
+                     - type: "ajaxSpider"
+                       parameters:
+                         maxDuration: 10
+                     - type: "passiveScan"
+                     - type: "activeScan"
+                       parameters:
+                         policy: "Default Policy"
+                         maxDuration: 15
+               EOF
+               cat > zap-job.yaml << 'EOF'
+               apiVersion: batch/v1
+               kind: Job
+               metadata:
+                 name: zap-scan
+                 namespace: app-test
+               spec:
+                 template:
+                   spec:
+                     containers:
+                     - name: zap
+                       image: owasp/zap2docker-stable
+                       command: ["zap-baseline.py"]
+                       args:
+                       - "-t"
+                       - "http://demo-app-svc.app-test.svc.cluster.local:8080"
+                       - "-c"
+                       - "/zap/wrk/config/zap_config.yml"
+                       - "-r"
+                       - "/zap/wrk/zap-report.html"
+                       - "-J"
+                       - "/zap/wrk/zap-report.json"
+                       volumeMounts:
+                       - name: zap-reports
+                         mountPath: /zap/wrk
+                       - name: zap-config
+                         mountPath: /zap/wrk/config
+                     volumes:
+                     - name: zap-reports
+                       emptyDir: {}
+                     - name: zap-config
+                       configMap:
+                         name: zap-config
+                     restartPolicy: Never
+                 backoffLimit: 1
+               EOF
+               kubectl apply -f zap-config-cm.yaml
+               kubectl apply -f zap-job.yaml
+               kubectl wait --for=condition=complete job/zap-scan --timeout=600s
+               kubectl cp app-test/$(kubectl get pod -n app-test -l job-name=zap-scan -o name | head -n 1):/zap/wrk/zap-report.json zap-report.json
+               kubectl cp app-test/$(kubectl get pod -n app-test -l job-name=zap-scan -o name | head -n 1):/zap/wrk/zap-report.html zap-report.html
+               cat zap-report.json
 
-      - name: Merge findings
-        run: |
-          source venv/bin/activate
-          python3 risk_model/inference/merge_findings.py \
-            --sast sast.json \
-            --secrets secrets.json \
-            --iac iac.json \
-            --sca sca.json \
-            --dast zap.json \
-            --out findings.jsonl
-          deactivate
+           - name: Merge findings
+             run: |
+               source venv/bin/activate
+               python3 risk_model/inference/merge_findings.py \
+                 --sast sast.json \
+                 --secrets secrets.json \
+                 --iac checkov-report.json \
+                 --sca sca.json \
+                 --dast zap-report.json \
+                 --out findings.jsonl
+               deactivate
 
-      - name: AI inference + HTML report
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          source venv/bin/activate
-          python3 risk_model/inference/infer.py \
-            --artifacts-dir artifacts \
-            --in findings.jsonl \
-            --out enriched.jsonl \
-            --report report.html
-          deactivate
+           - name: AI inference + HTML report
+             env:
+               OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+             run: |
+               source venv/bin/activate
+               python3 risk_model/inference/infer.py \
+                 --artifacts-dir artifacts \
+                 --in findings.jsonl \
+                 --out enriched.jsonl \
+                 --report report.html
+               deactivate
 
-      - name: Evaluate adaptive gate
-        id: gate
-        run: |
-          source venv/bin/activate
-          python3 adaptive/evaluate_gate.py > gate.json
-          THRESHOLD=$(jq -r .adaptive_threshold gate.json)
-          echo "threshold=$THRESHOLD" >> $GITHUB_OUTPUT
-          echo "Adaptive threshold set to: $THRESHOLD"
-          deactivate
+           - name: Evaluate adaptive gate
+             id: gate
+             run: |
+               source venv/bin/activate
+               python3 adaptive/evaluate_gate.py > gate.json
+               THRESHOLD=$(jq -r .adaptive_threshold gate.json)
+               echo "threshold=$THRESHOLD" >> $GITHUB_OUTPUT
+               echo "Adaptive threshold set to: $THRESHOLD"
+               deactivate
 
-      - name: Check gate
-        run: |
-          THRESH=${{ steps.gate.outputs.threshold }}
-          echo "Checking findings against threshold: $THRESH"
-          
-          VIOL=$(python3 -c "
-          import json
-          import sys
-          import os
-          
-          threshold = float(os.environ['THRESH'])
-          violations = 0
-          
-          try:
-              with open('enriched.jsonl', 'r') as f:
-                  for line in f:
-                      if line.strip():
-                          finding = json.loads(line)
-                          risk_score = finding.get('risk_score', 0)
-                          if risk_score >= threshold:
-                              violations += 1
-                              print(f'High-risk finding: {finding.get(\"title\", \"Unknown\")} (score: {risk_score})', file=sys.stderr)
-          except FileNotFoundError:
-              print('No enriched findings file found', file=sys.stderr)
-          except Exception as e:
-              print(f'Error processing findings: {e}', file=sys.stderr)
-          
-          print(violations)
-          ")
-          
-          echo "Findings above threshold: $VIOL"
-          if [ "$VIOL" -gt 0 ]; then 
-            echo "❌ Quality gate failed: $VIOL high-risk findings detected"
-            exit 1
-          else
-            echo "✅ Quality gate passed: No high-risk findings"
-          fi
-        env:
-          THRESH: ${{ steps.gate.outputs.threshold }}
+           - name: Check gate
+             run: |
+               THRESH=${{ steps.gate.outputs.threshold }}
+               echo "Checking findings against threshold: $THRESH"
+               
+               VIOL=$(python3 -c "
+               import json
+               import sys
+               import os
+               
+               threshold = float(os.environ['THRESH'])
+               violations = 0
+               
+               try:
+                   with open('enriched.jsonl', 'r') as f:
+                       for line in f:
+                           if line.strip():
+                               finding = json.loads(line)
+                               risk_score = finding.get('risk_score', 0)
+                               if risk_score >= threshold:
+                                   violations += 1
+                                   print(f'High-risk finding: {finding.get(\"title\", \"Unknown\")} (score: {risk_score})', file=sys.stderr)
+               except FileNotFoundError:
+                   print('No enriched findings file found', file=sys.stderr)
+               except Exception as e:
+                   print(f'Error processing findings: {e}', file=sys.stderr)
+               
+               print(violations)
+               ")
+               
+               echo "Findings above threshold: $VIOL"
+               if [ "$VIOL" -gt 0 ]; then 
+                 echo "❌ Quality gate failed: $VIOL high-risk findings detected"
+                 exit 1
+               else
+                 echo "✅ Quality gate passed: No high-risk findings"
+               fi
+             env:
+               THRESH: ${{ steps.gate.outputs.threshold }}
 
-      - name: Run Red Team tests
-        continue-on-error: true
-        run: |
-          export KUBECONFIG=kubeconfig
-          source venv/bin/activate
-          
-          # Get target host same way as DAST scan
-          TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
-          
-          if [ -z "$TARGET_HOST" ]; then
-            TARGET_HOST=$(kubectl get service demo-app-svc -n app-test -o jsonpath='{.spec.clusterIP}')
-            echo "Using ClusterIP: $TARGET_HOST"
-          fi
-          
-          if [ -z "$TARGET_HOST" ]; then
-            TARGET_HOST=${{ vars.STAGING_HOST }}
-            echo "Using STAGING_HOST variable: $TARGET_HOST"
-          fi
-          
-          if [ -n "$TARGET_HOST" ]; then
-            python3 redteam/run_attacks.py --target http://$TARGET_HOST:8080 --out redteam_results.json || echo "[]" > redteam_results.json
-          else
-            echo "No valid target host found for red team tests"
-            echo "[]" > redteam_results.json
-          fi
-          deactivate
+           - name: Run Red Team tests
+             continue-on-error: true
+             run: |
+               export KUBECONFIG=kubeconfig
+               source venv/bin/activate
+               
+               # Get target host from ingress
+               TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+               
+               if [ -z "$TARGET_HOST" ]; then
+                 TARGET_HOST=$(kubectl get service demo-app-svc -n app-test -o jsonpath='{.spec.clusterIP}')
+                 echo "Using ClusterIP: $TARGET_HOST"
+               fi
+               
+               if [ -z "$TARGET_HOST" ]; then
+                 TARGET_HOST=${{ vars.STAGING_HOST }}
+                 echo "Using STAGING_HOST variable: $TARGET_HOST"
+               fi
+               
+               if [ -n "$TARGET_HOST" ]; then
+                 python3 redteam/run_attacks.py --target http://$TARGET_HOST:8080 --out redteam_results.json || echo "[]" > redteam_results.json
+               else
+                 echo "No valid target host found for red team tests"
+                 echo "[]" > redteam_results.json
+               fi
+               deactivate
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: security-report-${{ github.run_number }}
-          path: |
-            report.html
-            findings.jsonl
-            enriched.jsonl
-            redteam_results.json
-            zap.json
-            sast.json
-            secrets.json
-            iac.json
-            sca.json
-            sbom.json
-            gate.json
+           - name: Verify App Accessibility
+             continue-on-error: true
+             run: |
+               curl --fail https://your-domain.com || echo "App not accessible"
 
-      - name: Clean up kubeconfig
-        if: always()
-        run: |
-          rm -f kubeconfig
+           - name: Upload artifacts
+             uses: actions/upload-artifact@v4
+             if: always()
+             with:
+               name: security-report-${{ github.run_number }}
+               path: |
+                 report.html
+                 findings.jsonl
+                 enriched.jsonl
+                 redteam_results.json
+                 zap-report.json
+                 zap-report.html
+                 checkov-report.json
+                 sast.json
+                 secrets.json
+                 sca.json
+                 sbom.json
+                 gate.json
+
+           - name: Clean up kubeconfig
+             if: always()
+             run: |
+               rm -f kubeconfig

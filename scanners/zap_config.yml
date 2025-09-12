@@ -1,9 +1,22 @@
-spider:
-  maxDepth: 5
-  maxChildren: 0
-scanner:
-  activeScan: true
-  threadsPerHost: 2
-report:
-  format: json
-  file: zap.json
+env:
+  contexts:
+    - name: "default-context"
+      urls:
+        - "http://my-app-service.default.svc.cluster.local:8080"
+      includePaths: []
+      excludePaths: []
+  authentication:
+    method: "none"
+jobs:
+  - type: "spider"
+    parameters:
+      maxDepth: 5
+      maxDuration: 10
+  - type: "ajaxSpider"
+    parameters:
+      maxDuration: 10
+  - type: "passiveScan"
+  - type: "activeScan"
+    parameters:
+      policy: "Default Policy"
+      maxDuration: 15
