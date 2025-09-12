@@ -301,7 +301,7 @@ jobs:
           # Create ZAP Job YAML
           cat <<EOT > scanners/zap-job.yaml
           apiVersion: batch/v1
-          Kind: Job
+          kind: Job
           metadata:
             name: zap-scan
             namespace: app-test
