@@ -1,0 +1,19 @@
+env:
+  contexts:
+    - name: "default-context"
+      urls:
+        - "http://demo-app-svc.app-test.svc.cluster.local:80"
+      includePaths: []
+      excludePaths: []
+  authentication:
+    method: "none"
+jobs:
+  - type: "spider"
+    parameters:
+      maxDepth: 2
+      maxDuration: 10
+  - type: "passiveScan"
+  - type: "activeScan"
+    parameters:
+      policy: "Default Policy"
+      maxDuration: 15
