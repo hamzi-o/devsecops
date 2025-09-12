@@ -273,14 +273,13 @@ jobs:
           deactivate
 
       - name: Check gate
+        env:
+          THRESH: ${{ steps.gate.outputs.threshold }}
         run: |
-          THRESH=${{ steps.gate.outputs.threshold }}
           echo "Checking findings against threshold: $THRESH"
-          VIOL=$(python3 -c "
-import json
-import sys
-import os
-threshold = float(os.environ['THRESH'])
+          VIOL=$(python3 - <<'PY'
+import json, os, sys
+threshold = float(os.environ.get('THRESH', '0'))
 violations = 0
 try:
     with open('enriched.jsonl', 'r') as f:
@@ -290,13 +289,14 @@ try:
                 risk_score = finding.get('risk_score', 0)
                 if risk_score >= threshold:
                     violations += 1
-                    print(f'High-risk finding: {finding.get(\"title\", \"Unknown\")} (score: {risk_score})', file=sys.stderr)
+                    print(f"High-risk finding: {finding.get('title','Unknown')} (score: {risk_score})", file=sys.stderr)
 except FileNotFoundError:
     print('No enriched findings file found', file=sys.stderr)
 except Exception as e:
     print(f'Error processing findings: {e}', file=sys.stderr)
 print(violations)
-")
+PY
+)
           echo "Findings above threshold: $VIOL"
           if [ "$VIOL" -gt 0 ]; then
             echo "❌ Quality gate failed: $VIOL high-risk findings detected"
@@ -304,8 +304,6 @@ print(violations)
           else
             echo "✅ Quality gate passed: No high-risk findings"
           fi
-        env:
-          THRESH: ${{ steps.gate.outputs.threshold }}
 
       - name: Run Red Team tests
         continue-on-error: true
