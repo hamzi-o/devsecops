@@ -153,16 +153,22 @@ jobs:
         run: |
           export PATH=$HOME/.local/bin:$PATH
           source venv/bin/activate
-          echo "=== Checking app/k8s directory ==="
+          echo "Checking app/k8s directory"
           ls -l app/k8s || echo "app/k8s directory not found or empty"
-          echo "=== Checking scanners/checkov.yml ==="
-          cat scanners/checkov.yml || { echo "scanners/checkov.yml not found"; exit 1; }
-          checkov -d app/k8s --config-file scanners/checkov.yml --output json --output-file-path checkov-report.json 2> checkov_error.log || {
+          echo "Checking scanners/checkov.yml"
+          if [ ! -f scanners/checkov.yml ]; then
+            echo "scanners/checkov.yml not found"
+            exit 1
+          fi
+          cat scanners/checkov.yml
+          checkov -d app/k8s --config-file scanners/checkov.yml --output json --output-file-path checkov-report.json 2> checkov_error.log
+          if [ $? -ne 0 ]; then
             echo "Checkov scan failed, creating empty results"
             echo '{"results": []}' > checkov-report.json
-            echo "=== Checkov Error Log ==="
+            echo "Checkov Error Log:"
             cat checkov_error.log
-          }
+          fi
+          echo "Checkov scan output:"
           cat checkov-report.json
           deactivate
 
@@ -196,7 +202,7 @@ jobs:
           export KUBECONFIG=kubeconfig
           kubectl apply -f scanners/zap-config-cm.yaml
           kubectl apply -f scanners/zap-job.yaml
-          echo "=== Waiting for ZAP job to complete ==="
+          echo "Waiting for ZAP job to complete"
           kubectl wait --for=condition=complete job/zap-scan -n app-test --timeout=1800s || {
             echo "ZAP scan job failed or timed out"
             kubectl describe job zap-scan -n app-test
@@ -230,7 +236,7 @@ jobs:
             --dast zap-report.json \
             --out findings.jsonl
           deactivate
-          echo "=== Debug: Merged Findings ==="
+          echo "Debug: Merged Findings"
           cat findings.jsonl || echo "No findings.jsonl found"
 
       - name: AI inference + HTML report
@@ -244,11 +250,11 @@ jobs:
             --out enriched.jsonl \
             --report report.html
           deactivate
-          echo "=== Debug: Input Findings ==="
+          echo "Debug: Input Findings"
           cat findings.jsonl || echo "No findings.jsonl found"
-          echo "=== Debug: Enriched Findings ==="
+          echo "Debug: Enriched Findings"
           cat enriched.jsonl || echo "No enriched.jsonl found"
-          echo "=== Debug: Report ==="
+          echo "Debug: Report"
           cat report.html || echo "No report.html found"
 
       - name: Evaluate adaptive gate
