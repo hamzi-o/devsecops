@@ -288,9 +288,9 @@ jobs:
           mkdir -p scanners
           
           # Create ZAP config
-          cat <<EOT > scanners/zap_config.yaml
-          # ZAP configuration
-          EOT
+          cat > scanners/zap_config.yaml << 'EOF'
+# ZAP configuration
+EOF
           
           # Create ConfigMap for ZAP config
           kubectl create configmap zap-config \
@@ -298,45 +298,54 @@ jobs:
             -n app-test \
             --dry-run=client -o yaml | kubectl apply -f -
           
-          # Create ZAP Job YAML
-          cat <<EOT > scanners/zap-job.yaml
-          apiVersion: batch/v1
-          kind: Job
-          metadata:
-            name: zap-scan
-            namespace: app-test
-          spec:
-            template:
-              spec:
-                containers:
-                - name: zap
-                  image: owasp/zap2docker-stable:2.15.0
-                  command:
-                  - zap-baseline.py
-                  args:
-                  - "-t"
-                  - "http://demo-app-svc.app-test.svc.cluster.local:80"
-                  - "-r"
-                  - "/zap/wrk/zap-report.html"
-                  - "-J"
-                  - "/zap/wrk/zap-report.json"
-                  - "-I"
-                  volumeMounts:
-                  - name: zap-config
-                    mountPath: /zap/config
-                restartPolicy: Never
-                volumes:
-                - name: zap-config
-                  configMap:
-                    name: zap-config
-            backoffLimit: 1
-          EOT
+          # Create ZAP Job YAML with proper formatting
+          cat > scanners/zap-job.yaml << 'EOF'
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: zap-scan
+  namespace: app-test
+spec:
+  template:
+    spec:
+      containers:
+      - name: zap
+        image: owasp/zap2docker-stable:2.15.0
+        command:
+        - zap-baseline.py
+        args:
+        - "-t"
+        - "http://demo-app-svc.app-test.svc.cluster.local:80"
+        - "-r"
+        - "/zap/wrk/zap-report.html"
+        - "-J"
+        - "/zap/wrk/zap-report.json"
+        - "-I"
+        volumeMounts:
+        - name: zap-config
+          mountPath: /zap/config
+      restartPolicy: Never
+      volumes:
+      - name: zap-config
+        configMap:
+          name: zap-config
+  backoffLimit: 1
+EOF
 
       - name: DAST scan with OWASP ZAP
         continue-on-error: true
         run: |
           export KUBECONFIG=kubeconfig
+          
+          # Delete any existing ZAP job first
+          kubectl delete job zap-scan -n app-test --ignore-not-found=true
+          
+          # Wait a moment for cleanup
+          sleep 5
+          
+          # Apply the job
           kubectl apply -f scanners/zap-job.yaml
+          
           echo "Waiting for ZAP job to complete"
           kubectl wait --for=condition=complete job/zap-scan -n app-test --timeout=1800s || {
             echo "ZAP scan job failed or timed out"
@@ -344,13 +353,16 @@ jobs:
             kubectl get pods -n app-test -l job-name=zap-scan
             POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
             if [ ! -z "$POD_NAME" ]; then
+              echo "ZAP pod logs:"
               kubectl logs -n app-test $POD_NAME || true
             fi
             echo '{"site": []}' > zap-report.json
             exit 0
           }
+          
           POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
           if [ ! -z "$POD_NAME" ]; then
+            echo "Copying ZAP reports from pod: $POD_NAME"
             kubectl cp app-test/$POD_NAME:/zap/wrk/zap-report.json zap-report.json 2> zap_cp_error.log || {
               echo "Error copying zap-report.json"
               cat zap_cp_error.log
@@ -366,8 +378,10 @@ jobs:
             echo '{"site": []}' > zap-report.json
             echo "<html><body>No ZAP report generated</body></html>" > zap-report.html
           fi
+          
           # Ensure we have valid JSON
           if [ -f zap-report.json ]; then
+            echo "ZAP report content:"
             cat zap-report.json
           fi
 
