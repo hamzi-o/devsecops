@@ -113,8 +113,12 @@ jobs:
           chmod +x $HOME/.local/bin/trivy
           trivy --version && echo "Trivy binary is functional" || echo "trivy_docker_fallback=true" >> $GITHUB_ENV
           rm -f trivy.tar.gz
-          curl -sSL https://github.com/gitleaks/gileaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
-          curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz -C $HOME/.local/bin gitleaks
+          rm -f gitleaks.tar.gz
+          curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz -o conftest.tar.gz
+          tar -xzf conftest.tar.gz -C $HOME/.local/bin conftest
+          rm -f conftest.tar.gz
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
