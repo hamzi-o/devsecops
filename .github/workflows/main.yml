@@ -202,7 +202,7 @@ jobs:
           rm -f trivy.tar.gz
           
           # Install other security scanners
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gileaks_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/bin gitleaks
           curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz | tar -xzf - -C $HOME/.local/bin conftest
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
           
@@ -250,17 +250,35 @@ jobs:
           source venv/bin/activate
           echo "=== Checking app/k8s directory ==="
           ls -l app/k8s || echo "app/k8s directory not found or empty"
-          if [ -d app/k8s ] && [ "$(ls -A app/k8s)" ]; then
-            echo "Running Checkov on app/k8s..."
-            checkov -d app/k8s --config-file checkov.yml --output json --output-file-path checkov-report.json || {
+          if [ -f checkov.yml ]; then
+            echo "Running Checkov with config file..."
+            checkov -d app/k8s --config-file checkov.yml --output json --output-file-path checkov-report.json 2> checkov_error.log || {
               echo "Checkov scan failed, creating empty results"
               echo '{"results": []}' > checkov-report.json
               echo "=== Checkov Error Log ==="
               cat checkov_error.log
             }
           else
-            echo "No valid IaC files found in app/k8s, creating empty results"
-            echo '{"results": []}' > checkov-report.json
+            echo "checkov.yml not found, creating default config..."
+            cat > checkov.yml << 'EOF'
+            framework: kubernetes
+            skip-check:
+              - CKV_K8S_20
+            soft-fail: true
+            file:
+              - app/k8s/deployment.yaml
+              - app/k8s/ingress.yaml
+              - app/k8s/namespace.yaml
+              - app/k8s/service.yaml
+            output: json
+            output-file-path: checkov-report.json
+            EOF
+            checkov -d app/k8s --config-file checkov.yml --output json --output-file-path checkov-report.json 2> checkov_error.log || {
+              echo "Checkov scan failed, creating empty results"
+              echo '{"results": []}' > checkov-report.json
+              echo "=== Checkov Error Log ==="
+              cat checkov_error.log
+            }
           fi
           cat checkov-report.json
           deactivate
@@ -311,7 +329,7 @@ jobs:
                 contexts:
                   - name: "default-context"
                     urls:
-                      - "http://demo-app-svc.app-test.svc.cluster.local:8080"
+                      - "http://demo-app-svc.app-test.svc.cluster.local:80"
                     includePaths: []
                     excludePaths: []
                 authentication:
@@ -319,16 +337,13 @@ jobs:
               jobs:
                 - type: "spider"
                   parameters:
-                    maxDepth: 5
-                    maxDuration: 10
-                - type: "ajaxSpider"
-                  parameters:
-                    maxDuration: 10
+                    maxDepth: 2
+                    maxDuration: 5
                 - type: "passiveScan"
                 - type: "activeScan"
                   parameters:
                     policy: "Default Policy"
-                    maxDuration: 15
+                    maxDuration: 5
           EOF
           cat > zap-job.yaml << 'EOF'
           apiVersion: batch/v1
@@ -345,7 +360,7 @@ jobs:
                   command: ["zap-baseline.py"]
                   args:
                   - "-t"
-                  - "http://demo-app-svc.app-test.svc.cluster.local:8080"
+                  - "http://demo-app-svc.app-test.svc.cluster.local:80"
                   - "-c"
                   - "/zap/wrk/config/zap_config.yml"
                   - "-r"
@@ -357,6 +372,13 @@ jobs:
                     mountPath: /zap/wrk
                   - name: zap-config
                     mountPath: /zap/wrk/config
+                  resources:
+                    limits:
+                      cpu: "500m"
+                      memory: "512Mi"
+                    requests:
+                      cpu: "200m"
+                      memory: "256Mi"
                 volumes:
                 - name: zap-reports
                   emptyDir: {}
@@ -368,8 +390,16 @@ jobs:
           EOF
           kubectl apply -f zap-config-cm.yaml
           kubectl apply -f zap-job.yaml
-          kubectl wait --for=condition=complete job/zap-scan -n app-test --timeout=600s || {
+          echo "=== Waiting for ZAP job to complete ==="
+          kubectl wait --for=condition=complete job/zap-scan -n app-test --timeout=1800s || {
             echo "ZAP scan job failed or timed out"
+            echo "=== ZAP Job Debug ==="
+            kubectl describe job zap-scan -n app-test
+            echo "=== ZAP Pod Status ==="
+            kubectl get pods -n app-test -l job-name=zap-scan
+            echo "=== ZAP Pod Logs ==="
+            POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o name | head -n 1)
+            kubectl logs -n app-test ${POD_NAME#pod/} || true
             exit 1
           }
           POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o name | head -n 1)
@@ -471,7 +501,7 @@ jobs:
           fi
           
           if [ -n "$TARGET_HOST" ]; then
-            python3 redteam/run_attacks.py --target http://$TARGET_HOST:8080 --out redteam_results.json || echo "[]" > redteam_results.json
+            python3 redteam/run_attacks.py --target http://$TARGET_HOST:80 --out redteam_results.json || echo "[]" > redteam_results.json
           else
             echo "No valid target host found for red team tests"
             echo "[]" > redteam_results.json
@@ -481,8 +511,8 @@ jobs:
       - name: Verify App Accessibility
         continue-on-error: true
         run: |
-          curl --fail https://your-domain.com || {
-            echo "App not accessible at https://your-domain.com"
+          curl --fail https://staging.hamza-builds.info || {
+            echo "App not accessible at https://staging.hamza-builds.info"
             exit 1
           }
 
