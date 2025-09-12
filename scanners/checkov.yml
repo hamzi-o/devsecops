@@ -8,4 +8,4 @@ file:
   - app/k8s/namespace.yaml
   - app/k8s/service.yaml
 output: json
-output-file-path: checkov-report.json
+output-file-path: scanners/checkov-report.json
