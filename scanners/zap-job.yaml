@@ -6,9 +6,6 @@ metadata:
 spec:
   backoffLimit: 0
   template:
-    metadata:
-      labels:
-        app: zap
     spec:
       restartPolicy: Never
       containers:
@@ -20,11 +17,18 @@ spec:
             - |
               TARGET=$(cat /zap-config/target-url)
               OPTIONS=$(cat /zap-config/zap-options)
-              zap-baseline.py -t "$TARGET" $OPTIONS -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json
+              echo "Running ZAP baseline scan against $TARGET with options $OPTIONS"
+              zap-baseline.py -t "$TARGET" $OPTIONS \
+                -r /zap/wrk/zap-report.html \
+                -J /zap/wrk/zap-report.json
           volumeMounts:
             - name: zap-config
               mountPath: /zap-config
+            - name: zap-wrk
+              mountPath: /zap/wrk
       volumes:
         - name: zap-config
           configMap:
             name: zap-config
+        - name: zap-wrk
+          emptyDir: {}
