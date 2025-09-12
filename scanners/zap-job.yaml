@@ -8,7 +8,6 @@ spec:
   template:
     spec:
       restartPolicy: Never
-      dnsPolicy: ClusterFirst
       containers:
         - name: zap
           image: ghcr.io/zaproxy/zaproxy:2.15.0
@@ -17,12 +16,14 @@ spec:
             - -c
             - |
               TARGET=$(cat /zap-config/target-url)
-              OPTIONS=$(cat /zap-config/zap-options)
-              mkdir -p /zap/wrk
-              zap-baseline.py -t "$TARGET" -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json $OPTIONS
+              zap-baseline.py \
+                -t "$TARGET" \
+                -r /zap/wrk/zap-report.html \
+                -J /zap/wrk/zap-report.json \
+                -z "-config globalexcludeurl.url_list.url.regex=.*logout.* -config globalexcludeurl.url_list.url.enabled=true"
           volumeMounts:
             - name: zap-config
-              mountPath: /zap/config
+              mountPath: /zap-config
             - name: zap-reports
               mountPath: /zap/wrk
       volumes:
