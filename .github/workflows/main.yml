@@ -23,15 +23,44 @@ jobs:
           python3 -m venv venv
           source venv/bin/activate
           pip install --upgrade pip
+          echo "=== Clearing pip cache to ensure fresh dependency installation ==="
           rm -rf ~/.cache/pip/*
           pip install -r requirements.txt
-          pip install httpx==0.27.2 openai==1.51.0 checkov==3.2.258
+          echo "=== Ensuring httpx==0.27.2 for openai compatibility ==="
+          pip install httpx==0.27.2
+          echo "=== Installing openai==1.51.0 ==="
+          pip install openai==1.51.0
+          echo "=== Verifying installed packages ==="
           pip list
-          python3 -c "import openai; print(openai.__version__)"
-          python3 -c "import httpx; print(httpx.__version__)"
-          checkov --version
-          python3 -c "from openai import OpenAI; print('OpenAI import successful')"
-          pip check || echo "Dependency conflicts detected, continuing with warning."
+          echo "=== Checking openai version ==="
+          python3 -c "import openai; print(openai.__version__)" || {
+            echo "Failed to import openai. Ensuring httpx and reinstalling openai==1.51.0."
+            pip install httpx==0.27.2
+            pip install openai==1.51.0
+            python3 -c "import openai; print(openai.__version__)"
+          }
+          echo "=== Checking httpx version ==="
+          python3 -c "import httpx; print(httpx.__version__)" || {
+            echo "httpx not found, installing httpx==0.27.2."
+            pip install httpx==0.27.2
+            python3 -c "import httpx; print(httpx.__version__)"
+          }
+          echo "=== Checking checkov version ==="
+          checkov --version || {
+            echo "Failed to verify checkov version. Reinstalling checkov==3.2.258."
+            pip install checkov==3.2.258
+            checkov --version
+          }
+          echo "=== Checking OpenAI class import ==="
+          python3 -c "from openai import OpenAI; print('OpenAI import successful')" || {
+            echo "OpenAI class import failed."
+            exit 1
+          }
+          echo "=== Checking for dependency conflicts ==="
+          pip check || {
+            echo "Dependency conflicts detected, continuing with warning."
+            echo "Please review pip check output for potential issues."
+          }
           deactivate
 
       - name: Set up Docker Buildx
@@ -95,8 +124,172 @@ jobs:
           rm -rf $HOME/.local/bin/*
           rm -rf $HOME/.cache/*
 
-      # (other steps like Install local scanners, Verify scanner installation, SAST/Secrets/IaC/SCA scans,
-      # SBOM generation, DAST scan, Merge findings, AI inference...) stay the same as your original workflow
+      - name: Install local scanners
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p $HOME/.local/bin
+          export PATH=$HOME/.local/bin:$PATH
+          ZAP_VERSION="2.15.0"
+          wget https://github.com/zaproxy/zaproxy/releases/download/v$ZAP_VERSION/ZAP_${ZAP_VERSION}_Linux.tar.gz -O zap.tar.gz
+          tar -xzf zap.tar.gz -C $HOME/.local/bin
+          mv $HOME/.local/bin/ZAP_${ZAP_VERSION} $HOME/.local/bin/zap
+          rm -f zap.tar.gz
+          TRIVY_VERSION="0.66.0"
+          curl -L https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz -o trivy.tar.gz
+          tar -xzf trivy.tar.gz -C $HOME/.local/bin
+          chmod +x $HOME/.local/bin/trivy
+          trivy --version && echo "Trivy binary is functional" || echo "trivy_docker_fallback=true" >> $GITHUB_ENV
+          rm -f trivy.tar.gz
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz -C $HOME/.local/bin
+          rm -f gitleaks.tar.gz
+          curl -L https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_0.60.0_Linux_x86_64.tar.gz -o conftest.tar.gz
+          tar -xzf conftest.tar.gz
+          mv conftest $HOME/.local/bin/conftest
+          rm -f conftest.tar.gz
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $HOME/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Verify scanner installation
+        continue-on-error: true
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          source venv/bin/activate
+          semgrep --version || { echo "Semgrep installation failed"; exit 1; }
+          checkov --version || { echo "Checkov installation failed"; exit 1; }
+          $HOME/.local/bin/zap/zap.sh -version || { echo "OWASP ZAP installation failed"; exit 1; }
+          deactivate
+          if [ "${{ env.trivy_docker_fallback }}" != "true" ]; then
+            trivy --version || echo "trivy_docker_fallback=true" >> $GITHUB_ENV
+          fi
+          syft --version || { echo "Syft installation failed"; exit 1; }
+          conftest --version || true
+          gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
+
+      - name: Run SAST scan
+        continue-on-error: true
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          source venv/bin/activate
+          semgrep --config scanners/semgrep_rules.yml --json > sast.json || echo "[]" > sast.json
+          deactivate
+
+      - name: Run Secrets scan
+        continue-on-error: true
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          gitleaks detect --source . --report-path secrets.json || echo "[]" > secrets.json
+
+      - name: Run IaC scan
+        continue-on-error: true
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          source venv/bin/activate
+          echo "Checking app/k8s directory"
+          ls -l app/k8s || echo "app/k8s directory not found or empty"
+          echo "Checking scanners/checkov.yml"
+          if [ ! -f scanners/checkov.yml ]; then
+            echo "scanners/checkov.yml not found"
+            exit 1
+          fi
+          cat scanners/checkov.yml
+          checkov -d app/k8s --config-file scanners/checkov.yml --output json --output-file-path checkov-report.json 2> checkov_error.log
+          if [ $? -ne 0 ]; then
+            echo "Checkov scan failed, creating empty results"
+            echo '{"results": []}' > checkov-report.json
+            echo "Checkov Error Log:"
+            cat checkov_error.log
+          fi
+          echo "Checkov scan output:"
+          cat checkov-report.json
+          deactivate
+
+      - name: Run SCA scan
+        continue-on-error: true
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          if [ "${{ env.trivy_docker_fallback }}" != "true" ]; then
+            trivy fs --format json --output sca.json . || echo "[]" > sca.json
+          else
+            docker run --rm -v $(pwd):/workspace -w /workspace aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo "[]" > sca.json
+          fi
+
+      - name: Generate SBOM
+        continue-on-error: true
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          syft dir:app -o json > sbom.json || echo "[]" > sbom.json
+
+      - name: Wait for service to be ready
+        run: |
+          export KUBECONFIG=kubeconfig
+          kubectl wait --for=condition=ready pod -n app-test -l app=demo-app --timeout=300s
+          kubectl get service demo-app-svc -n app-test
+          kubectl get ingress -n app-test
+          kubectl describe ingress demo-app-ing -n app-test
+
+      - name: DAST scan with OWASP ZAP
+        continue-on-error: true
+        run: |
+          export KUBECONFIG=kubeconfig
+          kubectl apply -f scanners/zap-config-cm.yaml
+          kubectl apply -f scanners/zap-job.yaml
+          echo "Waiting for ZAP job to complete"
+          kubectl wait --for=condition=complete job/zap-scan -n app-test --timeout=1800s || {
+            echo "ZAP scan job failed or timed out"
+            kubectl describe job zap-scan -n app-test
+            kubectl get pods -n app-test -l job-name=zap-scan
+            POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o name | head -n 1)
+            kubectl logs -n app-test ${POD_NAME#pod/} || true
+            echo '{"site": []}' > zap-report.json
+            exit 1
+          }
+          POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o name | head -n 1)
+          kubectl cp app-test/${POD_NAME#pod/}:/zap/wrk/zap-report.json zap-report.json 2> zap_cp_error.log || {
+            echo "Error copying zap-report.json"
+            cat zap_cp_error.log
+            echo '{"site": []}' > zap-report.json
+          }
+          kubectl cp app-test/${POD_NAME#pod/}:/zap/wrk/zap-report.html zap-report.html 2> zap_html_cp_error.log || {
+            echo "Error copying zap-report.html"
+            cat zap_html_cp_error.log
+            echo "<html><body>No ZAP report generated</body></html>" > zap-report.html
+          }
+          cat zap-report.json
+
+      - name: Merge findings
+        run: |
+          source venv/bin/activate
+          python3 risk_model/inference/merge_findings.py \
+            --sast sast.json \
+            --secrets secrets.json \
+            --iac checkov-report.json \
+            --sca sca.json \
+            --dast zap-report.json \
+            --out findings.jsonl
+          deactivate
+          echo "Debug: Merged Findings"
+          cat findings.jsonl || echo "No findings.jsonl found"
+
+      - name: AI inference + HTML report
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          source venv/bin/activate
+          python3 risk_model/inference/infer.py \
+            --artifacts-dir artifacts \
+            --in findings.jsonl \
+            --out enriched.jsonl \
+            --report report.html
+          deactivate
+          echo "Debug: Input Findings"
+          cat findings.jsonl || echo "No findings.jsonl found"
+          echo "Debug: Enriched Findings"
+          cat enriched.jsonl || echo "No enriched.jsonl found"
+          echo "Debug: Report"
+          cat report.html || echo "No report.html found"
 
       - name: Evaluate adaptive gate
         id: gate
