@@ -1,0 +1,21 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: zap-scan
+  namespace: app-test
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      containers:
+        - name: zap
+          image: owasp/zap2docker-stable:2.15.0
+          command: ["zap.sh", "-cmd", "-config", "/zap/wrk/zap_config.yaml"]
+          volumeMounts:
+            - name: zap-config
+              mountPath: /zap/wrk
+      restartPolicy: Never
+      volumes:
+        - name: zap-config
+          configMap:
+            name: zap-config
