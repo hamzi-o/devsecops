@@ -51,7 +51,7 @@ jobs:
           docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest app
           docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
           docker push ${{ secrets.REGISTRY }}/app:latest
-          sed -i "s#\${IMAGE_TAG}#$GIT_SHA#g" app/k8s/deployment.yamll
+          sed -i "s#\${IMAGE_TAG}#$GIT_SHA#g" app/k8s/deployment.yaml
 
       - name: Deploy app to k3s
         run: |
