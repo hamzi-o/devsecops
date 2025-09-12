@@ -6,14 +6,15 @@ metadata:
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
+  ingressClassName: traefik   # <-- set your ingress controller here
   rules:
-  - host: staging.hamza-builds.info
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: demo-app-svc
-            port:
-              number: 80
+    - host: staging.hamza-builds.info
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: demo-app-svc
+                port:
+                  number: 80
