@@ -17,7 +17,7 @@ spec:
       - name: ghcr-secret
       containers:
       - name: demo-app
-        image: ghcr.io/YOUR_USERNAME/app:${IMAGE_TAG}
+        image: ghcr.io/hamzi-o/devsecops/app:${IMAGE_TAG}
         ports:
         - containerPort: 8080
         resources:
