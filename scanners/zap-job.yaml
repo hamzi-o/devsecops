@@ -6,29 +6,29 @@ metadata:
 spec:
   backoffLimit: 0
   template:
+    metadata:
+      labels:
+        app: zap
     spec:
       restartPolicy: Never
       containers:
         - name: zap
-          image: ghcr.io/zaproxy/zaproxy:2.15.0
+          image: owasp/zap2docker-stable:2.15.0
           command:
             - /bin/sh
             - -c
             - |
-              TARGET=$(cat /zap-config/target-url)
-              OPTIONS=$(cat /zap-config/zap-options)
-              echo "Running ZAP baseline scan against $TARGET with options $OPTIONS"
-              zap-baseline.py -t "$TARGET" $OPTIONS \
-                -r /zap/wrk/zap-report.html \
-                -J /zap/wrk/zap-report.json
+              TARGET=$(cat /zap/config/target-url)
+              OPTIONS=$(cat /zap/config/zap-options)
+              zap-baseline.py -t "$TARGET" -c /zap/config/zap-config.yml -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json $OPTIONS
           volumeMounts:
             - name: zap-config
-              mountPath: /zap-config
-            - name: zap-wrk
+              mountPath: /zap/config
+            - name: zap-reports
               mountPath: /zap/wrk
       volumes:
         - name: zap-config
           configMap:
             name: zap-config
-        - name: zap-wrk
+        - name: zap-reports
           emptyDir: {}
