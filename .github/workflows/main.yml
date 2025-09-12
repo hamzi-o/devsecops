@@ -216,7 +216,7 @@ jobs:
             TARGET_URL="http://demo-app-svc.app-test.svc.cluster.local:80"
           else
             echo "Using service IP: $SERVICE_IP"
-            TARGET_URL="http://$SERVICE_IP:80"
+            TARGET_URL="http://$SERVICE_IP:8080"
           fi
           
           echo "$TARGET_URL" > scanners/target-url
