@@ -132,7 +132,7 @@ jobs:
           fi
           syft --version || { echo "Syft installation failed"; exit 1; }
           conftest --version || true
-          gileaks version || { echo "Gitleaks installation failed"; exit 1; }
+          gitleaks version || { echo "Gitleaks installation failed"; exit 1; }
 
       - name: Run SAST scan
         continue-on-error: true
@@ -156,7 +156,7 @@ jobs:
           echo "=== Checking app/k8s directory ==="
           ls -l app/k8s || echo "app/k8s directory not found or empty"
           echo "Creating checkov.yml..."
-          cat << EOF > checkov.yml
+          cat > checkov.yml << 'EOF'
 framework: kubernetes
 skip-check:
   - CKV_K8S_20
@@ -206,7 +206,7 @@ EOF
         continue-on-error: true
         run: |
           export KUBECONFIG=kubeconfig
-          cat << EOF > zap-config-cm.yaml
+          cat > zap-config-cm.yaml << 'EOF'
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -234,7 +234,7 @@ data:
           policy: "Default Policy"
           maxDuration: 5
 EOF
-          cat << EOF > zap-job.yaml
+          cat > zap-job.yaml << 'EOF'
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -304,6 +304,8 @@ EOF
             --dast zap-report.json \
             --out findings.jsonl
           deactivate
+          echo "=== Debug: Merged Findings ==="
+          cat findings.jsonl || echo "No findings.jsonl found"
 
       - name: AI inference + HTML report
         env:
