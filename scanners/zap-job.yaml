@@ -7,7 +7,6 @@ spec:
   backoffLimit: 0
   template:
     metadata:
-      name: zap-scan-pod
       labels:
         app: zap
     spec:
