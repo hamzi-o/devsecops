@@ -1,5 +1,3 @@
-# Note: This is a placeholder for your original infer.py (artifact_id: 3a99fcee-830c-4e02-86af-50c05265c080)
-# Minimal changes are applied to fix report issues and add ZAP/Checkov processing
 import json
 import pickle
 import pandas as pd
@@ -10,45 +8,57 @@ import torch
 import os
 from jinja2 import Template
 
-# Original functions from your infer.py (assumed based on context)
 def load_findings(file_path):
     findings = []
-    with open(file_path, 'r') as f:
-        for line in f:
-            if line.strip():
-                findings.append(json.loads(line))
+    try:
+        with open(file_path, 'r') as f:
+            for line in f:
+                if line.strip():
+                    findings.append(json.loads(line))
+    except Exception as e:
+        print(f"Error loading findings.jsonl: {e}")
     # Add ZAP results
     zap_file = Path('zap-report.json')
     if zap_file.exists():
-        with open(zap_file, 'r') as f:
-            zap_data = json.load(f)
-            for alert in zap_data.get('site', [{}])[0].get('alerts', []):
-                findings.append({
-                    'id': alert.get('alertRef', 'Unknown'),
-                    'type': 'dast',
-                    'title': alert.get('name', 'Unknown'),
-                    'description': alert.get('desc', ''),
-                    'severity': alert.get('riskdesc', 'LOW').split(' ')[0].upper(),
-                    'cwe': [f"CWE-{alert.get('cweid', '0')}"] if alert.get('cweid') else [],
-                    'location': alert.get('url', ''),
-                    'category': 'App'
-                })
+        try:
+            with open(zap_file, 'r') as f:
+                zap_data = json.load(f)
+                for alert in zap_data.get('site', [{}])[0].get('alerts', []):
+                    findings.append({
+                        'id': alert.get('alertRef', 'Unknown'),
+                        'type': 'dast',
+                        'title': alert.get('name', 'Unknown'),
+                        'description': alert.get('desc', ''),
+                        'severity': alert.get('riskdesc', 'LOW').split(' ')[0].upper(),
+                        'cwe': [f"CWE-{alert.get('cweid', '0')}"] if alert.get('cweid') else [],
+                        'location': alert.get('url', ''),
+                        'category': 'App'
+                    })
+        except Exception as e:
+            print(f"Error loading zap-report.json: {e}")
+    else:
+        print("zap-report.json not found")
     # Add Checkov results
     checkov_file = Path('checkov-report.json')
     if checkov_file.exists():
-        with open(checkov_file, 'r') as f:
-            checkov_data = json.load(f)
-            for result in checkov_data.get('results', {}).get('failed_checks', []):
-                findings.append({
-                    'id': result.get('check_id', 'Unknown'),
-                    'type': 'iac',
-                    'title': result.get('check_name', 'Unknown'),
-                    'description': result.get('description', ''),
-                    'severity': result.get('severity', 'LOW').upper(),
-                    'cwe': result.get('cwe', []),
-                    'location': result.get('file_path', ''),
-                    'category': 'Infrastructure'
-                })
+        try:
+            with open(checkov_file, 'r') as f:
+                checkov_data = json.load(f)
+                for result in checkov_data.get('results', {}).get('failed_checks', []):
+                    findings.append({
+                        'id': result.get('check_id', 'Unknown'),
+                        'type': 'iac',
+                        'title': result.get('check_name', 'Unknown'),
+                        'description': result.get('description', ''),
+                        'severity': result.get('severity', 'LOW').upper(),
+                        'cwe': result.get('cwe', []),
+                        'location': result.get('file_path', ''),
+                        'category': 'Infrastructure'
+                    })
+        except Exception as e:
+            print(f"Error loading checkov-report.json: {e}")
+    else:
+        print("checkov-report.json not found")
     return findings
 
 def get_cve_details(finding, client):
@@ -76,6 +86,7 @@ def get_cve_details(finding, client):
             response_format={"type": "json_object"}
         )
         result = json.loads(response.choices[0].message.content)
+        print(f"OpenAI response for {finding['title']}: {result}")
         return {
             'cve': result.get('cve', 'Unknown'),
             'cvss': float(result.get('cvss', 0.0)),
@@ -113,7 +124,6 @@ def prioritize_finding(finding):
     kev = finding['kev'] == 'Yes'
     owasp = finding['owasp'] != 'None'
     
-    # Fix: Ensure risk_score is 0.0 when CVSS is 0.0
     if cvss == 0.0:
         finding['risk_score'] = 0.0
         return 'Low'
@@ -146,6 +156,7 @@ def generate_summary(findings, client):
             ],
             max_tokens=300
         )
+        print(f"Summary response: {response.choices[0].message.content}")
         return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"Error generating summary: {e}")
@@ -245,30 +256,22 @@ def main():
     parser.add_argument('--report', type=Path, required=True, help="Output HTML report file")
     args = parser.parse_args()
 
-    # Initialize OpenAI client
     api_key = os.environ.get('OPENAI_API_KEY')
     if not api_key:
         raise ValueError("OPENAI_API_KEY not set")
     client = OpenAI(api_key=api_key)
 
-    # Load findings
     findings = load_findings(args.input_file)
-
-    # Enrich with CVE, CVSS, EPSS, KEV, OWASP
+    print(f"Loaded {len(findings)} findings")
     for finding in findings:
         details = get_cve_details(finding, client)
         finding.update(details)
         finding['priority'] = prioritize_finding(finding)
 
-    # Generate summary
     summary = generate_summary(findings, client)
-
-    # Save enriched findings
     with open(args.out, "w") as f:
         for finding in findings:
             f.write(json.dumps(finding) + "\n")
-
-    # Generate HTML report
     generate_html_report(findings, summary, args.report)
 
 if __name__ == "__main__":
