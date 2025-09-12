@@ -282,55 +282,53 @@ jobs:
           kubectl get ingress -n app-test
           kubectl describe ingress demo-app-ing -n app-test
 
-      - name: Create ZAP ConfigMap and Job YAML
+      - name: Apply ZAP ConfigMap from file (repo-based)
         run: |
           export KUBECONFIG=kubeconfig
-          mkdir -p scanners
-          
-          # Create ZAP config
-          cat > scanners/zap_config.yaml << 'EOF'
-# ZAP configuration
-EOF
-          
-          # Create ConfigMap for ZAP config
-          kubectl create configmap zap-config \
-            --from-file=zap_config.yaml=scanners/zap_config.yaml \
-            -n app-test \
-            --dry-run=client -o yaml | kubectl apply -f -
-          
-          # Create ZAP Job YAML with proper formatting
-          cat > scanners/zap-job.yaml << 'EOF'
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: zap-scan
-  namespace: app-test
-spec:
-  template:
-    spec:
-      containers:
-      - name: zap
-        image: owasp/zap2docker-stable:2.15.0
-        command:
-        - zap-baseline.py
-        args:
-        - "-t"
-        - "http://demo-app-svc.app-test.svc.cluster.local:80"
-        - "-r"
-        - "/zap/wrk/zap-report.html"
-        - "-J"
-        - "/zap/wrk/zap-report.json"
-        - "-I"
-        volumeMounts:
-        - name: zap-config
-          mountPath: /zap/config
-      restartPolicy: Never
-      volumes:
-      - name: zap-config
-        configMap:
-          name: zap-config
-  backoffLimit: 1
-EOF
+          NS="app-test"
+
+          # pick the canonical config file if there are duplicates
+          if [ -f scanners/zap-config.yml ]; then
+            ZAP_FILE="scanners/zap-config.yml"
+          elif [ -f scanners/zap_config.yml ]; then
+            ZAP_FILE="scanners/zap_config.yml"
+          elif [ -f scanners/zap-config-cm.yaml ]; then
+            echo "Found zap-config-cm.yaml - applying static ConfigMap manifest instead."
+            kubectl apply -n $NS -f scanners/zap-config-cm.yaml
+            ZAP_FILE=""
+          else
+            echo "No ZAP config file found in scanners/. Expected one of:"
+            echo "  scanners/zap-config.yml or scanners/zap_config.yml or scanners/zap-config-cm.yaml"
+            exit 1
+          fi
+
+          # Validate job manifest client-side so we catch basic YAML errors early
+          echo "Validating scanners/zap-job.yaml..."
+          kubectl apply --dry-run=client -f scanners/zap-job.yaml -n $NS || {
+            echo "zap-job.yaml validation failed (dry-run). Show file for debug:"
+            sed -n '1,200p' scanners/zap-job.yaml || true
+            exit 1
+          }
+
+          # If we have a plain zap config file, create ConfigMap from it (idempotent),
+          # using the file basename as the ConfigMap key so the job sees the same filename.
+          if [ -n "$ZAP_FILE" ]; then
+            CONFIG_BASENAME=$(basename "$ZAP_FILE")
+            echo "Creating/updating ConfigMap from $ZAP_FILE with key $CONFIG_BASENAME"
+            kubectl create configmap zap-config \
+              --from-file="$CONFIG_BASENAME"="$ZAP_FILE" \
+              -n $NS --dry-run=client -o yaml | kubectl apply -f -
+          fi
+
+          # Debug: show ConfigMap content (short)
+          echo "=== ConfigMap (short) ==="
+          kubectl get configmap zap-config -n $NS -o yaml || true
+
+      - name: Create ZAP Job YAML
+        run: |
+          # retained for backward compatibility with workflows that expect a job manifest,
+          # but in repo-based approach you already have scanners/zap-job.yaml committed.
+          echo "scanners/zap-job.yaml should be present in repo; no generated YAML here."
 
       - name: DAST scan with OWASP ZAP
         continue-on-error: true
