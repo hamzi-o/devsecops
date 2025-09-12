@@ -23,44 +23,11 @@ jobs:
           python3 -m venv venv
           source venv/bin/activate
           pip install --upgrade pip
-          echo "=== Clearing pip cache to ensure fresh dependency installation ==="
           rm -rf ~/.cache/pip/*
           pip install -r requirements.txt
-          echo "=== Ensuring httpx==0.27.2 for openai compatibility ==="
           pip install httpx==0.27.2
-          echo "=== Installing openai==1.51.0 ==="
           pip install openai==1.51.0
-          echo "=== Verifying installed packages ==="
-          pip list
-          echo "=== Checking openai version ==="
-          python3 -c "import openai; print(openai.__version__)" || {
-            echo "Failed to import openai. Ensuring httpx and reinstalling openai==1.51.0."
-            pip install httpx==0.27.2
-            pip install openai==1.51.0
-            python3 -c "import openai; print(openai.__version__)"
-          }
-          echo "=== Checking httpx version ==="
-          python3 -c "import httpx; print(httpx.__version__)" || {
-            echo "httpx not found, installing httpx==0.27.2."
-            pip install httpx==0.27.2
-            python3 -c "import httpx; print(httpx.__version__)"
-          }
-          echo "=== Checking checkov version ==="
-          checkov --version || {
-            echo "Failed to verify checkov version. Reinstalling checkov==3.2.258."
-            pip install checkov==3.2.258
-            checkov --version
-          }
-          echo "=== Checking OpenAI class import ==="
-          python3 -c "from openai import OpenAI; print('OpenAI import successful')" || {
-            echo "OpenAI class import failed."
-            exit 1
-          }
-          echo "=== Checking for dependency conflicts ==="
-          pip check || {
-            echo "Dependency conflicts detected, continuing with warning."
-            echo "Please review pip check output for potential issues."
-          }
+          checkov --version || pip install checkov==3.2.258
           deactivate
 
       - name: Set up Docker Buildx
@@ -81,71 +48,30 @@ jobs:
         run: |
           GIT_SHA=$(git rev-parse --short HEAD)
           echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
-          echo "Building image: ${{ secrets.REGISTRY }}/app:$GIT_SHA"
           docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest app
-          if [ $? -ne 0 ]; then
-            echo "Docker build failed"
-            exit 1
-          fi
-          echo "Pushing image: ${{ secrets.REGISTRY }}/app:$GIT_SHA"
           docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
-          if [ $? -ne 0 ]; then
-            echo "Docker push failed for tag $GIT_SHA"
-            exit 1
-          fi
-          echo "Pushing image: ${{ secrets.REGISTRY }}/app:latest"
           docker push ${{ secrets.REGISTRY }}/app:latest
-          if [ $? -ne 0 ]; then
-            echo "Docker push failed for tag latest"
-            exit 1
-          fi
           sed -i "s|\${IMAGE_TAG}|$GIT_SHA|g" app/k8s/deployment.yaml
-          echo "=== Updated deployment.yaml ==="
-          cat app/k8s/deployment.yaml
 
       - name: Deploy app to k3s
         run: |
           echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
           chmod 600 kubeconfig
           export KUBECONFIG=kubeconfig
-          
-          # Apply namespace first
           kubectl apply -f app/k8s/namespace.yaml
-          
-          # Create image pull secret for GHCR
           kubectl create secret docker-registry ghcr-secret \
             --docker-server=ghcr.io \
             --docker-username=${{ secrets.GHCR_USERNAME }} \
             --docker-password=${{ secrets.GHCR_TOKEN }} \
             --namespace=app-test \
             --dry-run=client -o yaml | kubectl apply -f -
-          
-          # Apply other manifests
           kubectl apply -f app/k8s/deployment.yaml
           kubectl apply -f app/k8s/service.yaml
           kubectl apply -f app/k8s/ingress.yaml
           kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
           kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
-          
-          # Wait a moment for pods to start
           sleep 10
-          
-          # Debug information
-          kubectl get deployment demo-app -n app-test -o wide
-          kubectl get pods -n app-test -o wide
-          kubectl describe pods -n app-test -l app=demo-app
-          kubectl get events -n app-test --sort-by='.lastTimestamp' | tail -10
-          kubectl describe ingress demo-app-ing -n app-test
-          
-          # Wait for rollout
-          if ! kubectl rollout status -n app-test deploy/demo-app --timeout=600s; then
-            echo "Deployment failed, check pods and logs"
-            kubectl describe pods -n app-test -l app=demo-app
-            kubectl logs -n app-test -l app=demo-app --all-containers=true --tail=50 || true
-            exit 1
-          fi
-          
-          kubectl get pods -n app-test -l app=demo-app
+          kubectl rollout status -n app-test deploy/demo-app --timeout=600s
 
       - name: Clear runner cache
         run: |
@@ -253,29 +179,24 @@ jobs:
         run: |
           export KUBECONFIG=kubeconfig
           mkdir -p scanners
+          echo "http://10.43.185.54:80" > scanners/target-url
+          echo "-c /zap/wrk/config/zap_config.yml" > scanners/zap-options
           kubectl create configmap zap-config \
             --from-file=target-url=scanners/target-url \
             --from-file=zap-options=scanners/zap-options \
             -n app-test --dry-run=client -o yaml | kubectl apply -f -
-          kubectl apply -f scanners/zap-job.yaml
-
-      - name: DAST scan with OWASP ZAP
-        continue-on-error: true
-        run: |
-          export KUBECONFIG=kubeconfig
           kubectl delete job zap-scan -n app-test --ignore-not-found=true
-          sleep 5
           kubectl apply -f scanners/zap-job.yaml
           echo "Waiting for ZAP job to complete"
-          kubectl wait --for=condition=complete job/zap-scan -n app-test --timeout=1800s || {
-            echo "ZAP scan job failed or timed out"
-            POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-            if [ ! -z "$POD_NAME" ]; then
-              kubectl logs -n app-test $POD_NAME || true
-            fi
+          kubectl wait --for=condition=complete job/zap-scan -n app-test --timeout=1800s || true
+          POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o jsonpath='{.items[0].metadata.name}')
+          if [ ! -z "$POD_NAME" ]; then
+            kubectl cp app-test/$POD_NAME:/zap/wrk/zap-report.json zap-report.json
+            kubectl cp app-test/$POD_NAME:/zap/wrk/zap-report.html zap-report.html
+          else
             echo '{"site": []}' > zap-report.json
             echo "<html><body>No ZAP report generated</body></html>" > zap-report.html
-          }
+          fi
 
       - name: Merge findings
         run: |
@@ -288,7 +209,6 @@ jobs:
             --dast zap-report.json \
             --out findings.jsonl
           deactivate
-          cat findings.jsonl || echo "No findings.jsonl found"
 
       - name: AI inference + HTML report
         env:
@@ -301,8 +221,6 @@ jobs:
             --out enriched.jsonl \
             --report report.html
           deactivate
-          cat enriched.jsonl || echo "No enriched.jsonl found"
-          cat report.html || echo "No report.html found"
 
       - name: Evaluate adaptive gate
         id: gate
@@ -333,13 +251,7 @@ jobs:
       - name: Verify App Accessibility
         continue-on-error: true
         run: |
-          curl --fail http://staging.hamza-builds.info || {
-            curl --fail --insecure https://staging.hamza-builds.info || {
-              kubectl describe certificate demo-app-tls -n app-test || echo "Certificate not found"
-              kubectl describe clusterissuer letsencrypt-prod || echo "ClusterIssuer not found"
-              exit 0
-            }
-          }
+          curl --fail http://staging.hamza-builds.info || curl --fail --insecure https://staging.hamza-builds.info || true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -362,5 +274,4 @@ jobs:
 
       - name: Clean up kubeconfig
         if: always()
-        run: |
-          rm -f kubeconfig
+        run: rm -f kubeconfig

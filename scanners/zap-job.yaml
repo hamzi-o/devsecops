@@ -6,24 +6,23 @@ metadata:
 spec:
   backoffLimit: 0
   template:
-    metadata:
-      labels:
-        app: zap
     spec:
       restartPolicy: Never
+      dnsPolicy: ClusterFirst
       containers:
         - name: zap
-          image: ghcr.io/zaproxy/zaproxy:stable
+          image: ghcr.io/zaproxy/zaproxy:2.15.0
           command:
             - /bin/sh
             - -c
             - |
               TARGET=$(cat /zap-config/target-url)
               OPTIONS=$(cat /zap-config/zap-options)
-              zap-baseline.py -t "$TARGET" -c /zap-config/zap-options -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json
+              mkdir -p /zap/wrk
+              zap-baseline.py -t "$TARGET" -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json $OPTIONS
           volumeMounts:
             - name: zap-config
-              mountPath: /zap-config
+              mountPath: /zap/config
             - name: zap-reports
               mountPath: /zap/wrk
       volumes:
