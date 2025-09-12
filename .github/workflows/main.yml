@@ -155,9 +155,9 @@ jobs:
           source venv/bin/activate
           echo "=== Checking app/k8s directory ==="
           ls -l app/k8s || echo "app/k8s directory not found or empty"
-          echo "=== Checking checkov.yml ==="
-          cat checkov.yml || { echo "checkov.yml not found"; exit 1; }
-          checkov -d app/k8s --config-file checkov.yml --output json --output-file-path checkov-report.json 2> checkov_error.log || {
+          echo "=== Checking scanners/checkov.yml ==="
+          cat scanners/checkov.yml || { echo "scanners/checkov.yml not found"; exit 1; }
+          checkov -d app/k8s --config-file scanners/checkov.yml --output json --output-file-path checkov-report.json 2> checkov_error.log || {
             echo "Checkov scan failed, creating empty results"
             echo '{"results": []}' > checkov-report.json
             echo "=== Checkov Error Log ==="
