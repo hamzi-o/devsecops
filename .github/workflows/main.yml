@@ -169,9 +169,7 @@ jobs:
           checkov -d app/k8s --config-file scanners/checkov.yml --output json --output-file-path checkov-report.json 2> checkov_error.log
           if [ $? -ne 0 ]; then
             echo "Checkov scan failed, creating empty results"
-            cat << EOF > checkov-report.json
-{"results": []}
-EOF
+            echo '{"results": []}' > checkov-report.json
             echo "Checkov Error Log:"
             cat checkov_error.log
           fi
@@ -216,14 +214,14 @@ EOF
             kubectl get pods -n app-test -l job-name=zap-scan
             POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o name | head -n 1)
             kubectl logs -n app-test ${POD_NAME#pod/} || true
-            echo "{\"site\": []}" > zap-report.json
+            echo '{"site": []}' > zap-report.json
             exit 1
           }
           POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o name | head -n 1)
           kubectl cp app-test/${POD_NAME#pod/}:/zap/wrk/zap-report.json zap-report.json 2> zap_cp_error.log || {
             echo "Error copying zap-report.json"
             cat zap_cp_error.log
-            echo "{\"site\": []}" > zap-report.json
+            echo '{"site": []}' > zap-report.json
           }
           kubectl cp app-test/${POD_NAME#pod/}:/zap/wrk/zap-report.html zap-report.html 2> zap_html_cp_error.log || {
             echo "Error copying zap-report.html"
