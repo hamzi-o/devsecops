@@ -1,28 +1,34 @@
-env:
-  contexts:
-    - name: "default-context"
-      urls:
-        - "http://206.189.27.183:30080"  # Replace with your k3s node IP
-      includePaths: []
-      excludePaths: []
-  authentication:
-    method: "none"
-
-jobs:
-  - type: "spider"
-    parameters:
-      maxDepth: 2
-      maxDuration: 10
-
-  - type: "passiveScan"
-
-  - type: "activeScan"
-    parameters:
-      policy: "Default Policy"
-
-output:
-  reports:
-    - format: "JSON"
-      file: "/zap/wrk/zap-report.json"
-    - format: "HTML"
-      file: "/zap/wrk/zap-report.html"
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: zap-scan
+  namespace: app-test
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: zap
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: zap
+          image: ghcr.io/zaproxy/zaproxy:2.15.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              TARGET=$(cat /zap-config/target-url)
+              OPTIONS=$(cat /zap-config/zap-options)
+              zap-baseline.py -t "$TARGET" -c /zap-config/zap-options -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json
+          volumeMounts:
+            - name: zap-config
+              mountPath: /zap-config
+            - name: zap-reports
+              mountPath: /zap/wrk
+      volumes:
+        - name: zap-config
+          configMap:
+            name: zap-config
+        - name: zap-reports
+          emptyDir: {}
