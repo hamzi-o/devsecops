@@ -13,17 +13,17 @@ spec:
       restartPolicy: Never
       containers:
         - name: zap
-          image: owasp/zap2docker-stable:2.15.0
+          image: ghcr.io/zaproxy/zaproxy:stable
           command:
             - /bin/sh
             - -c
             - |
-              TARGET=$(cat /zap/config/target-url)
-              OPTIONS=$(cat /zap/config/zap-options)
-              zap-baseline.py -t "$TARGET" -c /zap/config/zap-config.yml -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json $OPTIONS
+              TARGET=$(cat /zap-config/target-url)
+              OPTIONS=$(cat /zap-config/zap-options)
+              zap-baseline.py -t "$TARGET" -c /zap-config/zap-options -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json
           volumeMounts:
             - name: zap-config
-              mountPath: /zap/config
+              mountPath: /zap-config
             - name: zap-reports
               mountPath: /zap/wrk
       volumes:
