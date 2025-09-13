@@ -362,5 +362,3 @@ jobs:
       - name: Clean up kubeconfig
         if: always()
         run: rm -f kubeconfig
-
-
