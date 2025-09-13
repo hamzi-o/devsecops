@@ -8,10 +8,10 @@ spec:
     spec:
       containers:
       - name: zap
-        image: owasp/zap2docker-stable:2.15.0
+        image: zaproxy/zap-stable # Updated ZAP image
         command: ["/bin/sh", "-c"]
         args: [
-          "TARGET=$(cat /zap/wrk/target-url); \
+          "TARGET=$(cat /zap/wrk/target-url ); \
           zap-baseline.py \
           -t \"$TARGET\" \
           -r /zap/wrk/zap-report.html \

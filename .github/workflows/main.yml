@@ -46,7 +46,7 @@ jobs:
       - name: Build & push Docker image
         id: meta
         run: |
-          GIT_SHA=$(git rev-parse --short HEAD )
+          GIT_SHA=$(git rev-parse --short HEAD)
           echo "image_tag=$GIT_SHA" >> $GITHUB_OUTPUT
           docker build -t ${{ secrets.REGISTRY }}/app:$GIT_SHA -t ${{ secrets.REGISTRY }}/app:latest app
           docker push ${{ secrets.REGISTRY }}/app:$GIT_SHA
@@ -152,7 +152,7 @@ jobs:
           if [ \"${{ env.trivy_docker_fallback }}\" != \"true\" ]; then
             trivy fs --format json --output sca.json . || echo \"[]\" > sca.json
           else
-            docker run --rm -v $(pwd ):/workspace -w /workspace aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo \"[]\" > sca.json
+            docker run --rm -v $(pwd):/workspace -w /workspace aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo \"[]\" > sca.json
           fi
 
       - name: Generate SBOM
@@ -172,10 +172,10 @@ jobs:
           
           # Add a robust wait for the application to be truly accessible
           echo "Waiting for application to be accessible via service..."
-          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".status.loadBalancer.ingress[0].ip" || kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP")
+          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath="{.spec.clusterIP}")
           SERVICE_DNS="demo-app-svc.app-test.svc.cluster.local"
           
-          for i in $(seq 1 30); do
+          for i in $(seq 1 10); do
             if curl -s -o /dev/null -w "%{http_code}" "http://$SERVICE_IP:80" | grep "200"; then
               echo "Application accessible via service IP: $SERVICE_IP:80"
               break
@@ -186,7 +186,7 @@ jobs:
               echo "Attempt $i: Application not yet accessible. Retrying in 5 seconds..."
               sleep 5
             fi
-            if [ $i -eq 30 ]; then
+            if [ $i -eq 10 ]; then
               echo "Application did not become accessible within timeout."
               exit 1
             fi
@@ -197,7 +197,7 @@ jobs:
           export KUBECONFIG=kubeconfig
           
           # Get the service IP
-          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".status.loadBalancer.ingress[0].ip" || kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP" )
+          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath="{.spec.clusterIP}")
           echo "Service IP: $SERVICE_IP"
           
           # Check if pods are running
@@ -221,66 +221,13 @@ jobs:
             curl -v --fail --connect-timeout 10 --max-time 30 \"http://demo-app-svc.app-test.svc.cluster.local:80\" || echo \"Service DNS failed\"; \
           " || echo "Connectivity test failed"
 
-      - name: Verify NetworkPolicies
-        run: |
-          export KUBECONFIG=kubeconfig
-          echo "=== NetworkPolicies in app-test namespace ==="
-          kubectl get networkpolicies -n app-test -o yaml
-          echo "=== Describe allow-ingress-to-demo-app NetworkPolicy ==="
-          kubectl describe networkpolicy allow-ingress-to-demo-app -n app-test || echo "NetworkPolicy allow-ingress-to-demo-app not found or failed to describe."
-
-      - name: Debug app connectivity (In-Pod )
-        if: always()
-        run: |
-          export KUBECONFIG=kubeconfig
-          echo "=== Debugging Application Pod ==="
-          
-          # Robustly get POD_NAME
-          POD_NAME=""
-          for i in $(seq 1 10); do
-            POD_NAME=$(kubectl get pods -n app-test -l app=demo-app -o jsonpath=".items[0].metadata.name" 2>/dev/null)
-            if [ ! -z "$POD_NAME" ]; then
-              echo "Found pod: $POD_NAME"
-              break
-            fi
-            echo "Attempt $i: Pod not found yet. Waiting 5 seconds..."
-            sleep 5
-          done
-
-          if [ ! -z "$POD_NAME" ]; then
-            echo "Application Pod Logs:"
-            kubectl logs -n app-test $POD_NAME --tail=200
-            echo "Application Pod Describe:"
-            kubectl describe pod -n app-test $POD_NAME
-            
-            echo "=== In-Pod Connectivity and Listening Ports ==="
-            # Attempt to use pre-installed tools or a temporary debug pod
-            echo "Checking listening ports inside pod (using ss if available):"
-            kubectl exec -n app-test $POD_NAME -- ss -tulnp || echo "ss not found or failed"
-            
-            echo "Checking listening ports inside pod (using netstat if available):"
-            kubectl exec -n app-test $POD_NAME -- netstat -tulnp || echo "netstat not found or failed"
-            
-            echo "Curl 127.0.0.1:8080 from inside pod:"
-            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://127.0.0.1:8080 || echo "Curl to localhost:8080 failed"
-            
-            echo "Curl service IP from inside pod:"
-            SERVICE_IP_INTERNAL=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP" )
-            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://$SERVICE_IP_INTERNAL:80 || echo "Curl to service IP from inside pod failed"
-
-          else
-            echo "No application pod found after multiple attempts."
-          fi
-          echo "Application Deployment Describe:"
-          kubectl describe deployment -n app-test demo-app
-
       - name: Create ZAP ConfigMap and Job YAML
         run: |
           export KUBECONFIG=kubeconfig
           mkdir -p scanners
           
           # Get the actual service IP dynamically
-          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".status.loadBalancer.ingress[0].ip" || kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP" )
+          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath="{.spec.clusterIP}" 2>/dev/null)
           if [ -z "$SERVICE_IP" ]; then
             echo "Could not get service IP, using DNS name"
             TARGET_URL="http://demo-app-svc.app-test.svc.cluster.local:80"
@@ -310,7 +257,7 @@ jobs:
             echo "ZAP scan timed out or failed - debugging:"
             kubectl describe job zap-scan -n app-test
             kubectl get pods -n app-test -l job-name=zap-scan
-            POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o jsonpath=".items[0].metadata.name" 2>/dev/null )
+            POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o jsonpath=".items[0].metadata.name" 2>/dev/null)
             if [ ! -z "$POD_NAME" ]; then
               echo "ZAP pod logs:"
               kubectl logs -n app-test $POD_NAME --tail=100
@@ -376,9 +323,41 @@ jobs:
           python3 redteam/run_attacks.py --target "http://$TARGET_HOST:80" --out redteam_results.json || echo "[]" > redteam_results.json
           deactivate
 
+      - name: Debug app connectivity
+        if: always()
+        run: |
+          export KUBECONFIG=kubeconfig
+          echo "=== Debugging Application Pod ==="
+          POD_NAME=$(kubectl get pods -n app-test -l app=demo-app -o jsonpath=".items[0].metadata.name")
+          if [ ! -z "$POD_NAME" ]; then
+            echo "Application Pod Logs:"
+            kubectl logs -n app-test $POD_NAME --tail=200
+            echo "Application Pod Describe:"
+            kubectl describe pod -n app-test $POD_NAME
+            
+            echo "=== In-Pod Connectivity and Listening Ports ==="
+            # Install curl and net-tools inside the pod for debugging
+            kubectl exec -n app-test $POD_NAME -- sh -c "apk add --no-cache curl net-tools || apt-get update && apt-get install -y curl net-tools"
+            
+            echo "Listening ports inside pod:"
+            kubectl exec -n app-test $POD_NAME -- netstat -tulnp
+            
+            echo "Curl 127.0.0.1:8080 from inside pod:"
+            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://127.0.0.1:8080
+            
+            echo "Curl service IP from inside pod:"
+            SERVICE_IP_INTERNAL=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP")
+            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://$SERVICE_IP_INTERNAL:80
+
+          else
+            echo "No application pod found."
+          fi
+          echo "Application Deployment Describe:"
+          kubectl describe deployment -n app-test demo-app
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
-        if: always( )
+        if: always()
         with:
           name: security-report-${{ github.run_number }}
           path: |
