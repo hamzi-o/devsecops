@@ -221,6 +221,38 @@ jobs:
             curl -v --fail --connect-timeout 10 --max-time 30 \"http://demo-app-svc.app-test.svc.cluster.local:80\" || echo \"Service DNS failed\"; \
           " || echo "Connectivity test failed"
 
+      - name: Debug app connectivity
+        if: always( )
+        run: |
+          export KUBECONFIG=kubeconfig
+          echo "=== Debugging Application Pod ==="
+          POD_NAME=$(kubectl get pods -n app-test -l app=demo-app -o jsonpath=".items[0].metadata.name")
+          if [ ! -z "$POD_NAME" ]; then
+            echo "Application Pod Logs:"
+            kubectl logs -n app-test $POD_NAME --tail=200
+            echo "Application Pod Describe:"
+            kubectl describe pod -n app-test $POD_NAME
+            
+            echo "=== In-Pod Connectivity and Listening Ports ==="
+            # Install curl and net-tools inside the pod for debugging
+            kubectl exec -n app-test $POD_NAME -- sh -c "apk add --no-cache curl net-tools || apt-get update && apt-get install -y curl net-tools"
+            
+            echo "Listening ports inside pod:"
+            kubectl exec -n app-test $POD_NAME -- netstat -tulnp
+            
+            echo "Curl 127.0.0.1:8080 from inside pod:"
+            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://127.0.0.1:8080
+            
+            echo "Curl service IP from inside pod:"
+            SERVICE_IP_INTERNAL=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP" )
+            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://$SERVICE_IP_INTERNAL:80
+
+          else
+            echo "No application pod found."
+          fi
+          echo "Application Deployment Describe:"
+          kubectl describe deployment -n app-test demo-app
+
       - name: Create ZAP ConfigMap and Job YAML
         run: |
           export KUBECONFIG=kubeconfig
@@ -322,39 +354,6 @@ jobs:
           TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath=".items[0].status.loadBalancer.ingress[0].hostname" 2>/dev/null || echo "staging.hamza-builds.info")
           python3 redteam/run_attacks.py --target "http://$TARGET_HOST:80" --out redteam_results.json || echo "[]" > redteam_results.json
           deactivate
-
-      - name: Debug app connectivity
-        if: always( )
-        run: |
-          export KUBECONFIG=kubeconfig
-          echo "=== Debugging Application Pod ==="
-          POD_NAME=$(kubectl get pods -n app-test -l app=demo-app -o jsonpath=".items[0].metadata.name")
-          if [ ! -z "$POD_NAME" ]; then
-            echo "Application Pod Logs:"
-            kubectl logs -n app-test $POD_NAME --tail=200
-            echo "Application Pod Describe:"
-            kubectl describe pod -n app-test $POD_NAME
-            
-            echo "=== In-Pod Connectivity and Listening Ports ==="
-            # Install curl and net-tools inside the pod for debugging
-            # Use 'apk add' for Alpine-based images (common in BusyBox, Python-slim) or 'apt-get' for Debian-based
-            kubectl exec -n app-test $POD_NAME -- sh -c "if command -v apk &> /dev/null; then apk add --no-cache curl net-tools; elif command -v apt-get &> /dev/null; then apt-get update && apt-get install -y curl net-tools; else echo \"Neither apk nor apt-get found. Cannot install debugging tools.\"; fi"
-            
-            echo "Listening ports inside pod:"
-            kubectl exec -n app-test $POD_NAME -- netstat -tulnp || echo "netstat not found or failed"
-            
-            echo "Curl 127.0.0.1:8080 from inside pod:"
-            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://127.0.0.1:8080 || echo "Curl to localhost:8080 failed"
-            
-            echo "Curl service IP from inside pod:"
-            SERVICE_IP_INTERNAL=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP" )
-            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://$SERVICE_IP_INTERNAL:80 || echo "Curl to service IP from inside pod failed"
-
-          else
-            echo "No application pod found."
-          fi
-          echo "Application Deployment Describe:"
-          kubectl describe deployment -n app-test demo-app
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
