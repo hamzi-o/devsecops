@@ -4,17 +4,17 @@ metadata:
   name: demo-app-ing
   namespace: app-test
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
+    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
-  ingressClassName: traefik
+  ingressClassName: nginx   # <-- specify NGINX ingress class
   rules:
-  - host: staging.hamza-builds.info
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: demo-app-svc
-            port:
-              number: 80
+    - host: staging.hamza-builds.info
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: demo-app-svc
+                port:
+                  number: 80
