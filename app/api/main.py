@@ -6,6 +6,11 @@ app = FastAPI(title="Adaptive DevSecOps Demo")
 class Echo(BaseModel):
     data: dict | None = None
 
+@app.get("/")
+def root():
+    return {"message": "Welcome to the Adaptive DevSecOps Demo API"}
+
+
 @app.get("/healthz")
 def healthz():
     return {"status": "ok", "service": "devsecops-demo"}
