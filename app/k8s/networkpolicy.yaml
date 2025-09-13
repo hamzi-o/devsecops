@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-demo-app
+  namespace: app-test
+spec:
+  podSelector:
+    matchLabels:
+      app: demo-app # This policy applies only to pods with label app: demo-app
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {} # Allow ingress from any pod within the same namespace
+      ports:
+        - protocol: TCP
+          port: 8080 # Allow traffic to the application's container port
