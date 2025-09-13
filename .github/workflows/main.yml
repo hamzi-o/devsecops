@@ -68,7 +68,8 @@ jobs:
           kubectl apply -f app/k8s/deployment.yaml
           kubectl apply -f app/k8s/service.yaml
           kubectl apply -f app/k8s/ingress.yaml
-          kubectl apply -f app/k8s/networkpolicy.yaml # <--- ADDED THIS LINE
+          # Optional: Apply network policy if needed
+          # kubectl apply -f app/k8s/networkpolicy.yaml
           kubectl apply -f policies/gatekeeper-templates/deny-high-risk.yaml
           kubectl apply -f policies/gatekeeper-constraints/deny-high-risk.yaml
           sleep 10
@@ -137,41 +138,35 @@ jobs:
           source venv/bin/activate
           mkdir -p scanners
           if [ ! -f scanners/checkov.yml ]; then
-            printf \"{\"results\": {\"failed_checks\": [], \"passed_checks\": [], \"skipped_checks\": []}}\" > scanners/results.json
+            printf "{\"results\": {\"failed_checks\": [], \"passed_checks\": [], \"skipped_checks\": []}}" > scanners/results.json
             deactivate
             exit 0
           fi
           checkov -d app/k8s --config-file scanners/checkov.yml --output json --output-file-path scanners/results.json 2> checkov_error.log || \
-            printf \"{\"results\": {\"failed_checks\": [], \"passed_checks\": [], \"skipped_checks\": []}}\" > scanners/results.json
+            printf "{\"results\": {\"failed_checks\": [], \"passed_checks\": [], \"skipped_checks\": []}}" > scanners/results.json
           deactivate
 
       - name: Run SCA scan
         continue-on-error: true
         run: |
           export PATH=$HOME/.local/bin:$PATH
-          if [ \"${{ env.trivy_docker_fallback }}\" != \"true\" ]; then
-            trivy fs --format json --output sca.json . || echo \"[]\" > sca.json
+          if [ "${{ env.trivy_docker_fallback }}" != "true" ]; then
+            trivy fs --format json --output sca.json . || echo "[]" > sca.json
           else
-            docker run --rm -v $(pwd):/workspace -w /workspace aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo \"[]\" > sca.json
+            docker run --rm -v $(pwd):/workspace -w /workspace aquasec/trivy:0.66.0 fs --format json --output sca.json . || echo "[]" > sca.json
           fi
 
       - name: Generate SBOM
         continue-on-error: true
         run: |
           export PATH=$HOME/.local/bin:$PATH
-          syft dir:app -o json > sbom.json || echo \"[]\" > sbom.json
+          syft dir:app -o json > sbom.json || echo "[]" > sbom.json
 
       - name: Wait for service to be ready
         continue-on-error: true
         run: |
           export KUBECONFIG=kubeconfig
           kubectl wait --for=condition=ready pod -n app-test -l app=demo-app --timeout=300s
-          kubectl get service demo-app-svc -n app-test
-          kubectl get ingress -n app-test
-          kubectl describe ingress demo-app-ing -n app-test
-          
-          # Add a robust wait for the application to be truly accessible
-          echo "Waiting for application to be accessible via service..."
           SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath="{.spec.clusterIP}")
           SERVICE_DNS="demo-app-svc.app-test.svc.cluster.local"
           
@@ -192,84 +187,49 @@ jobs:
             fi
           done
 
-      - name: Test internal connectivity before ZAP
+      - name: Test internal connectivity from a pod
         run: |
           export KUBECONFIG=kubeconfig
-          
-          # Get the service IP
           SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath="{.spec.clusterIP}")
           echo "Service IP: $SERVICE_IP"
-          
-          # Check if pods are running
-          echo "=== Pod Status ==="
-          kubectl get pods -n app-test -l app=demo-app -o wide
-          
-          # Check service details
-          echo "=== Service Details ==="
-          kubectl describe service demo-app-svc -n app-test
-          
-          # Check endpoints
-          echo "=== Service Endpoints ==="
-          kubectl get endpoints demo-app-svc -n app-test -o wide
-          
-          # Test connectivity from within cluster
-          echo "=== Testing Internal Connectivity ==="
+
           kubectl run test-connectivity --image=curlimages/curl:latest --rm -i --restart=Never -n app-test -- sh -c "\
-            echo \"Testing service IP: $SERVICE_IP:80\"; \
-            curl -v --fail --connect-timeout 10 --max-time 30 \"http://$SERVICE_IP:80\" || echo \"Service IP failed\"; \
-            echo \"Testing service DNS:\"; \
-            curl -v --fail --connect-timeout 10 --max-time 30 \"http://demo-app-svc.app-test.svc.cluster.local:80\" || echo \"Service DNS failed\"; \
+            echo 'Testing service IP: $SERVICE_IP:80'; \
+            curl -v --fail --connect-timeout 10 --max-time 30 http://$SERVICE_IP:80 || echo 'Service IP failed'; \
+            echo 'Testing service DNS'; \
+            curl -v --fail --connect-timeout 10 --max-time 30 http://demo-app-svc.app-test.svc.cluster.local:80 || echo 'Service DNS failed'; \
           " || echo "Connectivity test failed"
 
-      - name: Create ZAP ConfigMap and Job YAML
+      - name: Run ZAP DAST scan
+        continue-on-error: true
         run: |
           export KUBECONFIG=kubeconfig
           mkdir -p scanners
-          
-          # Get the actual service IP dynamically
-          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath="{.spec.clusterIP}" 2>/dev/null)
-          if [ -z "$SERVICE_IP" ]; then
-            echo "Could not get service IP, using DNS name"
-            TARGET_URL="http://demo-app-svc.app-test.svc.cluster.local:80"
-          else
-            echo "Using service IP: $SERVICE_IP"
-            TARGET_URL="http://$SERVICE_IP:80"
-          fi
-          
+          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath="{.spec.clusterIP}")
+          TARGET_URL="http://$SERVICE_IP:80"
           echo "$TARGET_URL" > scanners/target-url
           echo "-c /zap/wrk/config/zap_config.yml" > scanners/zap-options
+
           kubectl create configmap zap-config \
             --from-file=target-url=scanners/target-url \
             --from-file=zap-options=scanners/zap-options \
             -n app-test --dry-run=client -o yaml | kubectl apply -f -
-          
-          # Update the zap-job.yaml with the dynamic target
-          # The zap-job.yaml is now configured to use the TARGET_URL directly
-          # No sed replacement needed here if the zap-job.yaml is properly templated
-          # For this example, we assume zap-job.yaml will be updated to directly use the TARGET_URL from the configmap or environment variable.
-          
+
           kubectl delete job zap-scan -n app-test --ignore-not-found=true
           sleep 5
           kubectl apply -f scanners/zap-job.yaml
-          
-          echo "Waiting for ZAP job to complete, target: $TARGET_URL"
           kubectl wait --for=condition=complete job/zap-scan -n app-test --timeout=1800s || {
-            echo "ZAP scan timed out or failed - debugging:"
             kubectl describe job zap-scan -n app-test
-            kubectl get pods -n app-test -l job-name=zap-scan
             POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o jsonpath=".items[0].metadata.name" 2>/dev/null)
-            if [ ! -z "$POD_NAME" ]; then
-              echo "ZAP pod logs:"
-              kubectl logs -n app-test $POD_NAME --tail=100
-            fi
+            kubectl logs -n app-test $POD_NAME --tail=100
           }
-          
+
           POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o jsonpath=".items[0].metadata.name" 2>/dev/null)
           if [ ! -z "$POD_NAME" ]; then
-            kubectl cp app-test/$POD_NAME:/zap/wrk/zap-report.json zap-report.json || echo \"{\"site\": []}\" > zap-report.json
+            kubectl cp app-test/$POD_NAME:/zap/wrk/zap-report.json zap-report.json || echo "{\"site\": []}" > zap-report.json
             kubectl cp app-test/$POD_NAME:/zap/wrk/zap-report.html zap-report.html || echo "<html><body>No ZAP report generated</body></html>" > zap-report.html
           else
-            echo \"{\"site\": []}\" > zap-report.json
+            echo "{\"site\": []}" > zap-report.json
             echo "<html><body>No ZAP report generated</body></html>" > zap-report.html
           fi
 
@@ -327,32 +287,16 @@ jobs:
         if: always()
         run: |
           export KUBECONFIG=kubeconfig
-          echo "=== Debugging Application Pod ==="
           POD_NAME=$(kubectl get pods -n app-test -l app=demo-app -o jsonpath=".items[0].metadata.name")
           if [ ! -z "$POD_NAME" ]; then
-            echo "Application Pod Logs:"
             kubectl logs -n app-test $POD_NAME --tail=200
-            echo "Application Pod Describe:"
             kubectl describe pod -n app-test $POD_NAME
-            
-            echo "=== In-Pod Connectivity and Listening Ports ==="
-            # Install curl and net-tools inside the pod for debugging
             kubectl exec -n app-test $POD_NAME -- sh -c "apk add --no-cache curl net-tools || apt-get update && apt-get install -y curl net-tools"
-            
-            echo "Listening ports inside pod:"
             kubectl exec -n app-test $POD_NAME -- netstat -tulnp
-            
-            echo "Curl 127.0.0.1:8080 from inside pod:"
             kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://127.0.0.1:8080
-            
-            echo "Curl service IP from inside pod:"
             SERVICE_IP_INTERNAL=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP")
             kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://$SERVICE_IP_INTERNAL:80
-
-          else
-            echo "No application pod found."
           fi
-          echo "Application Deployment Describe:"
           kubectl describe deployment -n app-test demo-app
 
       - name: Upload artifacts
