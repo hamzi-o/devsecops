@@ -6,40 +6,35 @@ metadata:
 spec:
   template:
     spec:
-      containers:
-      - name: zap
-        image: zaproxy/zap-stable # Updated ZAP image
-        command: ["/bin/sh", "-c"]
-        args: [
-          "TARGET=$(cat /zap/wrk/target-url ); \
-          zap-baseline.py \
-          -t \"$TARGET\" \
-          -r /zap/wrk/zap-report.html \
-          -J /zap/wrk/zap-report.json \
-          -z \"-config globalexcludeurl.url_list.url.regex=.*logout.* -config globalexcludeurl.url_list.url.enabled=true\""
-        ]
-        volumeMounts:
-        - name: zap-config-volume
-          mountPath: /zap/wrk/config
-        - name: zap-target-volume
-          mountPath: /zap/wrk/target-url
-          subPath: target-url
-        - name: zap-report-volume
-          mountPath: /zap/wrk
       restartPolicy: Never
+      containers:
+        - name: zap
+          image: owasp/zap2docker-stable
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - |
+              # Read the target URL from ConfigMap
+              TARGET_URL=$(cat /zap-config/target-url)
+              echo "Scanning target: $TARGET_URL"
+              
+              # Run ZAP spider and active scan
+              zap.sh -daemon -host 0.0.0.0 -port 8080 -config api.disablekey=true
+              sleep 10
+              zap-cli --zap-url http://localhost:8080 status -t 120
+              zap-cli --zap-url http://localhost:8080 spider $TARGET_URL
+              zap-cli --zap-url http://localhost:8080 active-scan $TARGET_URL
+              zap-cli --zap-url http://localhost:8080 report -o /zap/wrk/zap-report.json -f json
+              zap-cli --zap-url http://localhost:8080 report -o /zap/wrk/zap-report.html -f html
+          volumeMounts:
+            - name: zap-config
+              mountPath: /zap-config
+            - name: zap-work
+              mountPath: /zap/wrk
       volumes:
-      - name: zap-config-volume
-        configMap:
-          name: zap-config
-          items:
-          - key: zap-options
-            path: zap_config.yml
-      - name: zap-target-volume
-        configMap:
-          name: zap-config
-          items:
-          - key: target-url
-            path: target-url
-      - name: zap-report-volume
-        emptyDir: {}
-  backoffLimit: 0
+        - name: zap-config
+          configMap:
+            name: zap-config
+        - name: zap-work
+          emptyDir: {}
