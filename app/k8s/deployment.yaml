@@ -27,3 +27,17 @@ spec:
           requests:
             cpu: "200m"
             memory: "256Mi"
+        readinessProbe:
+          httpGet:
+            path: / # Assuming your app has a root endpoint that returns 200 OK when ready
+            port: 8080
+          initialDelaySeconds: 10 # Give the app some time to start
+          periodSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: / # Assuming your app has a root endpoint that returns 200 OK when healthy
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 3
