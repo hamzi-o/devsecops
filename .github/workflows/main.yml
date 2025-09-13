@@ -16,7 +16,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles("requirements.txt") }}
 
       - name: Set up Python virtual environment
         run: |
@@ -221,8 +221,16 @@ jobs:
             curl -v --fail --connect-timeout 10 --max-time 30 \"http://demo-app-svc.app-test.svc.cluster.local:80\" || echo \"Service DNS failed\"; \
           " || echo "Connectivity test failed"
 
-      - name: Debug app connectivity
-        if: always( )
+      - name: Verify NetworkPolicies
+        run: |
+          export KUBECONFIG=kubeconfig
+          echo "=== NetworkPolicies in app-test namespace ==="
+          kubectl get networkpolicies -n app-test -o yaml
+          echo "=== Describe allow-ingress-to-demo-app NetworkPolicy ==="
+          kubectl describe networkpolicy allow-ingress-to-demo-app -n app-test || echo "NetworkPolicy allow-ingress-to-demo-app not found or failed to describe."
+
+      - name: Debug app connectivity (In-Pod )
+        if: always()
         run: |
           export KUBECONFIG=kubeconfig
           echo "=== Debugging Application Pod ==="
@@ -234,18 +242,19 @@ jobs:
             kubectl describe pod -n app-test $POD_NAME
             
             echo "=== In-Pod Connectivity and Listening Ports ==="
-            # Install curl and net-tools inside the pod for debugging
-            kubectl exec -n app-test $POD_NAME -- sh -c "apk add --no-cache curl net-tools || apt-get update && apt-get install -y curl net-tools"
+            # Attempt to use pre-installed tools or a temporary debug pod
+            echo "Checking listening ports inside pod (using ss if available):"
+            kubectl exec -n app-test $POD_NAME -- ss -tulnp || echo "ss not found or failed"
             
-            echo "Listening ports inside pod:"
-            kubectl exec -n app-test $POD_NAME -- netstat -tulnp
+            echo "Checking listening ports inside pod (using netstat if available):"
+            kubectl exec -n app-test $POD_NAME -- netstat -tulnp || echo "netstat not found or failed"
             
             echo "Curl 127.0.0.1:8080 from inside pod:"
-            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://127.0.0.1:8080
+            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://127.0.0.1:8080 || echo "Curl to localhost:8080 failed"
             
             echo "Curl service IP from inside pod:"
             SERVICE_IP_INTERNAL=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP" )
-            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://$SERVICE_IP_INTERNAL:80
+            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://$SERVICE_IP_INTERNAL:80 || echo "Curl to service IP from inside pod failed"
 
           else
             echo "No application pod found."
