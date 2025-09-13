@@ -172,7 +172,7 @@ jobs:
           
           # Add a robust wait for the application to be truly accessible
           echo "Waiting for application to be accessible via service..."
-          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP")
+          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".status.loadBalancer.ingress[0].ip" || kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP")
           SERVICE_DNS="demo-app-svc.app-test.svc.cluster.local"
           
           for i in $(seq 1 30); do
@@ -197,7 +197,7 @@ jobs:
           export KUBECONFIG=kubeconfig
           
           # Get the service IP
-          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP" )
+          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".status.loadBalancer.ingress[0].ip" || kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP" )
           echo "Service IP: $SERVICE_IP"
           
           # Check if pods are running
@@ -280,7 +280,7 @@ jobs:
           mkdir -p scanners
           
           # Get the actual service IP dynamically
-          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP" 2>/dev/null )
+          SERVICE_IP=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".status.loadBalancer.ingress[0].ip" || kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP" )
           if [ -z "$SERVICE_IP" ]; then
             echo "Could not get service IP, using DNS name"
             TARGET_URL="http://demo-app-svc.app-test.svc.cluster.local:80"
