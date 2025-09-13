@@ -16,7 +16,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles("requirements.txt") }}
 
       - name: Set up Python virtual environment
         run: |
@@ -234,7 +234,19 @@ jobs:
         run: |
           export KUBECONFIG=kubeconfig
           echo "=== Debugging Application Pod ==="
-          POD_NAME=$(kubectl get pods -n app-test -l app=demo-app -o jsonpath=".items[0].metadata.name")
+          
+          # Robustly get POD_NAME
+          POD_NAME=""
+          for i in $(seq 1 10); do
+            POD_NAME=$(kubectl get pods -n app-test -l app=demo-app -o jsonpath=".items[0].metadata.name" 2>/dev/null)
+            if [ ! -z "$POD_NAME" ]; then
+              echo "Found pod: $POD_NAME"
+              break
+            fi
+            echo "Attempt $i: Pod not found yet. Waiting 5 seconds..."
+            sleep 5
+          done
+
           if [ ! -z "$POD_NAME" ]; then
             echo "Application Pod Logs:"
             kubectl logs -n app-test $POD_NAME --tail=200
@@ -257,7 +269,7 @@ jobs:
             kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://$SERVICE_IP_INTERNAL:80 || echo "Curl to service IP from inside pod failed"
 
           else
-            echo "No application pod found."
+            echo "No application pod found after multiple attempts."
           fi
           echo "Application Deployment Describe:"
           kubectl describe deployment -n app-test demo-app
