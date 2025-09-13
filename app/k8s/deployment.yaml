@@ -29,15 +29,18 @@ spec:
             memory: "256Mi"
         readinessProbe:
           httpGet:
-            path: / # Assuming your app has a root endpoint that returns 200 OK when ready
+            path: /healthz # <--- IMPORTANT: Change this to your application's actual health endpoint (e.g., /health or /status) that returns 200 OK
             port: 8080
           initialDelaySeconds: 10 # Give the app some time to start
           periodSeconds: 5
           failureThreshold: 3
         livenessProbe:
           httpGet:
-            path: / # Assuming your app has a root endpoint that returns 200 OK when healthy
+            path: /healthz # <--- IMPORTANT: Change this to your application's actual health endpoint (e.g., /health or /status) that returns 200 OK
             port: 8080
           initialDelaySeconds: 30
           periodSeconds: 10
           failureThreshold: 3
+
+
+
