@@ -9,14 +9,14 @@ spec:
       restartPolicy: Never
       containers:
         - name: zap
-          image: owasp/zap2docker-stable
+          image: zaproxy/zap-stable
           imagePullPolicy: Always
           command:
             - sh
             - -c
             - |
               # Read the target URL from ConfigMap
-              TARGET_URL=$(cat /zap-config/target-url)
+              TARGET_URL=staging.hamza-builds.info
               echo "Scanning target: $TARGET_URL"
               
               # Run ZAP spider and active scan
