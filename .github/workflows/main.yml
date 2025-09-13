@@ -16,9 +16,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+            key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
 
-      - name: Set up Python virtual environment
+      - name: Set up Python virtual environmentnt
         run: |
           python3 -m venv venv
           source venv/bin/activate
