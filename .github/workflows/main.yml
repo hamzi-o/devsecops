@@ -182,10 +182,10 @@ jobs:
           SERVICE_DNS="demo-app-svc.app-test.svc.cluster.local"
           
           for i in $(seq 1 30); do
-            if curl -s -o /dev/null -w \"%{http_code}\" http://$SERVICE_IP:80 | grep \"200\"; then
+            if curl -v --fail --connect-timeout 5 --max-time 10 http://$SERVICE_IP:80; then
               echo "Application accessible via service IP: $SERVICE_IP:80"
               break
-            elif curl -s -o /dev/null -w \"%{http_code}\" http://$SERVICE_DNS:80 | grep \"200\"; then
+            elif curl -v --fail --connect-timeout 5 --max-time 10 http://$SERVICE_DNS:80; then
               echo "Application accessible via service DNS: $SERVICE_DNS:80"
               break
             else
@@ -221,10 +221,10 @@ jobs:
           # Test connectivity from within cluster
           echo "=== Testing Internal Connectivity ==="
           kubectl run test-connectivity --image=curlimages/curl:latest --rm -i --restart=Never -n app-test -- sh -c "\
-            echo \'Testing service IP: $SERVICE_IP:80\'; \
-            curl -v --connect-timeout 10 --max-time 30 http://$SERVICE_IP:80 || echo \'Service IP failed\'; \
-            echo \'Testing service DNS:\'; \
-            curl -v --connect-timeout 10 --max-time 30 http://demo-app-svc.app-test.svc.cluster.local:80 || echo \'Service DNS failed\'; \
+               echo 'Testing service IP: $SERVICE_IP:80'; \
+            curl -v --fail --connect-timeout 10 --max-time 30 http://$SERVICE_IP:80 || echo 'Service IP failed'; \
+            echo 'Testing service DNS:'; \
+            curl -v --fail --connect-timeout 10 --max-time 30 http://demo-app-svc.app-test.svc.cluster.local:80 || echo 'Service DNS failed'; \
           " || echo "Connectivity test failed"
 
       - name: Create ZAP ConfigMap and Job YAML
@@ -334,7 +334,7 @@ jobs:
         run: |
           export KUBECONFIG=kubeconfig
           echo "=== Debugging Application Pod ==="
-          POD_NAME=$(kubectl get pods -n app-test -l app=demo-app -o jsonpath=\\'{.items[0].metadata.name}\' 2>/dev/null)
+          POD_NAME=$(kubectl get pods -n app-test -l app=demo-app -o jsonpath=\"{.items[0].metadata.name}\")
           if [ ! -z "$POD_NAME" ]; then
             echo "Application Pod Logs:"
             kubectl logs -n app-test $POD_NAME --tail=200
