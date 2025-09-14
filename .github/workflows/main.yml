@@ -202,14 +202,14 @@ jobs:
 
           # Create ZAP configuration (tab-separated format)
           cat > scanners/zap_config.yml << 'EOF'
-spider	maxDepth	5
-spider	maxChildren	0
-spider	parseComments	true
-spider	parseRobotsTxt	true
-spider	parseSitemapXml	true
-spider	acceptCookies	true
-spider	handleParameters	0
-EOF
+       spider	maxDepth	5
+      spider	maxChildren	0
+      spider	parseComments	true
+      spider	parseRobotsTxt	true
+      spider	parseSitemapXml	true
+      spider	acceptCookies	true
+      spider	handleParameters	0
+      EOF
 
           # Apply ConfigMap
           kubectl create configmap zap-config \
