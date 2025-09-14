@@ -200,17 +200,6 @@ jobs:
           # Set ZAP options (JSON + HTML report + config file)
           echo "-J /zap/wrk/zap-report.json -r /zap/wrk/zap-report.html -c /zap-config/zap_config.yml" > scanners/zap-options
 
-          # Create ZAP configuration (tab-separated format)
-          cat > scanners/zap_config.yml << 'EOF'
-      spider	maxDepth	5
-      spider	maxChildren	0
-      spider	parseComments	true
-      spider	parseRobotsTxt	true
-      spider	parseSitemapXml	true
-      spider	acceptCookies	true
-      spider	handleParameters	0
-      EOF
-
           # Apply ConfigMap
           kubectl create configmap zap-config \
             --from-file=target-url=scanners/target-url \
