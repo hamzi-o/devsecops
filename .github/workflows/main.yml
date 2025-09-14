@@ -142,12 +142,12 @@ jobs:
           source venv/bin/activate
           mkdir -p scanners
           if [ ! -f scanners/checkov.yml ]; then
-            printf '{"results": {"failed_checks": [], "passed_checks": [], "skipped_checks": []}}' > scanners/results.json
+            printf '{"results": {"failed_checks": [], "passed_checks": [], "skipped_checks": []}}' > scanners
             deactivate
             exit 0
           fi
-          checkov -d app/k8s --config-file scanners/checkov.yml --output json --output-file-path scanners/results.json 2> checkov_error.log || \
-            printf '{"results": {"failed_checks": [], "passed_checks": [], "skipped_checks": []}}' > scanners/results.json
+          checkov -d app/k8s --config-file scanners/checkov.yml --output json --output-file-path scanners 2> checkov_error.log || \
+            printf '{"results": {"failed_checks": [], "passed_checks": [], "skipped_checks": []}}' > scanners
           deactivate
 
       - name: Run SCA scan
@@ -227,7 +227,7 @@ jobs:
           python3 risk_model/inference/merge_findings.py \
             --sast sast.json \
             --secrets secrets.json \
-            --iac scanners/results.json/results.json.json \
+            --iac scanners/results.json \
             --sca sca.json \
             --dast zap-report.json \
             --out findings.jsonl
