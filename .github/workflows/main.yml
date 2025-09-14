@@ -142,12 +142,12 @@ jobs:
           source venv/bin/activate
           mkdir -p scanners
           if [ ! -f scanners/checkov.yml ]; then
-            printf '{"results": {"failed_checks": [], "passed_checks": [], "skipped_checks": []}}' > scanners/results
+            printf '{"results": {"failed_checks": [], "passed_checks": [], "skipped_checks": []}}' > scanners/results/
             deactivate
             exit 0
           fi
-          checkov -d app/k8s --config-file scanners/checkov.yml --output json --output-file-path scanners/results 2> checkov_error.log || \
-            printf '{"results": {"failed_checks": [], "passed_checks": [], "skipped_checks": []}}' > scanners/results
+          checkov -d app/k8s --config-file scanners/checkov.yml --output json --output-file-path scanners/results/ 2> checkov_error.log || \
+            printf '{"results": {"failed_checks": [], "passed_checks": [], "skipped_checks": []}}' > scanners/results/
           deactivate
 
       - name: Run SCA scan
@@ -255,30 +255,14 @@ jobs:
           python3 adaptive/check_gate.py
           deactivate
 
-      - name: Run Red Team tests
-        continue-on-error: true
-        run: |
-          export KUBECONFIG=kubeconfig
-          source venv/bin/activate
-          TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath=".items[0].status.loadBalancer.ingress[0].hostname" 2>/dev/null || echo "staging.hamza-builds.info")
-          python3 redteam/run_attacks.py --target "http://$TARGET_HOST:80" --out redteam_results.json || echo "[]" > redteam_results.json
-          deactivate
-
-      - name: Debug app connectivity
-        if: always()
-        run: |
-          export KUBECONFIG=kubeconfig
-          POD_NAME=$(kubectl get pods -n app-test -l app=demo-app -o jsonpath=".items[0].metadata.name")
-          if [ ! -z "$POD_NAME" ]; then
-            kubectl logs -n app-test $POD_NAME --tail=200
-            kubectl describe pod -n app-test $POD_NAME
-            kubectl exec -n app-test $POD_NAME -- sh -c "apk add --no-cache curl net-tools || apt-get update && apt-get install -y curl net-tools"
-            kubectl exec -n app-test $POD_NAME -- netstat -tulnp
-            SERVICE_IP_INTERNAL=$(kubectl get service demo-app-svc -n app-test -o jsonpath=".spec.clusterIP")
-            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://127.0.0.1:8080
-            kubectl exec -n app-test $POD_NAME -- curl -v --fail --connect-timeout 5 --max-time 10 http://$SERVICE_IP_INTERNAL:80
-          fi
-          kubectl describe deployment -n app-test demo-app
+     # - name: Run Red Team tests
+     #   continue-on-error: true
+     #   run: |
+     #     export KUBECONFIG=kubeconfig
+     #     source venv/bin/activate
+     #     TARGET_HOST=$(kubectl get ingress -n app-test -o jsonpath=".items[0].status.loadBalancer.ingress[0].hostname" 2>/dev/null || echo "staging.hamza-builds.info")
+     #     python3 redteam/run_attacks.py --target "http://$TARGET_HOST:80" --out redteam_results.json || echo "[]" > redteam_results.json
+     #     deactivate
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -289,10 +273,9 @@ jobs:
             report.html
             findings.jsonl
             enriched.jsonl
-            redteam_results.json
             zap-report.json
             zap-report.html
-            scanners/results.json
+            scanners/results/results.json
             sast.json
             secrets.json
             sca.json

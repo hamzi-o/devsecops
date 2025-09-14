@@ -28,7 +28,8 @@ spec:
             zap-full-scan.py \
               -t "$TARGET" \
               -r /zap/wrk/zap-report.html \
-              -J /zap/wrk/zap-report.json \ || true
+              -J /zap/wrk/zap-report.json \
+              -a || true
 
         volumeMounts:
         - name: zap-reports
