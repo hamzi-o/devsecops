@@ -202,7 +202,7 @@ jobs:
 
           # Create ZAP configuration (tab-separated format)
           cat > scanners/zap_config.yml << 'EOF'
-       spider	maxDepth	5
+      spider	maxDepth	5
       spider	maxChildren	0
       spider	parseComments	true
       spider	parseRobotsTxt	true
