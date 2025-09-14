@@ -198,7 +198,7 @@ jobs:
           echo "$TARGET_URL" > scanners/target-url
 
           # Set ZAP options (JSON + HTML report + config file)
-          echo "-J /zap/wrk/zap-report.json -r /zap/wrk/zap-report.html -c /zap-config/zap_config.yml" > scanners/zap-options
+          echo "-J /zap/wrk/zap-report.json -r /zap/wrk/zap-report.html --active-scan true" > scanners/zap-options
 
           # Apply ConfigMap
           kubectl create configmap zap-config \
