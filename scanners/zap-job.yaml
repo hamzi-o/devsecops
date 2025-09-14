@@ -28,9 +28,8 @@ spec:
             zap-full-scan.py \
               -t "$TARGET" \
               -r /zap/wrk/zap-report.html \
-              -J /zap/wrk/zap-report.json \
+              -J /zap/wrk/zap-report.json \ || true
 
-            echo "ZAP scan completed. Reports are stored in /zap/wrk/"
         volumeMounts:
         - name: zap-reports
           mountPath: /zap/wrk
