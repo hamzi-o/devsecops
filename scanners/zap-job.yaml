@@ -30,7 +30,7 @@ spec:
               -r /zap/wrk/zap-report.html \
               -J /zap/wrk/zap-report.json \
               -a || true
-
+            sleep 1800
         volumeMounts:
         - name: zap-reports
           mountPath: /zap/wrk
