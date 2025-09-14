@@ -200,12 +200,6 @@ jobs:
           # Set ZAP options (JSON + HTML report + config file)
           echo "-J /zap/wrk/zap-report.json -r /zap/wrk/zap-report.html --active-scan true" > scanners/zap-options
 
-          # Apply ConfigMap
-          kubectl create configmap zap-config \
-            --from-file=target-url=scanners/target-url \
-            --from-file=zap-options=scanners/zap-options \
-            -n app-test --dry-run=client -o yaml | kubectl apply -f -
-
           kubectl delete job zap-scan -n app-test --ignore-not-found=true
           kubectl apply -f scanners/zap-job.yaml
 

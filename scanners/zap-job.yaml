@@ -19,28 +19,21 @@ spec:
           - -c
           - |
             set -e
-            TARGET=$(cat /zap-config/target-url)
-            CONFIG_FILE=/zap-config/zap_config.yml
-            OPTIONS=$(cat /zap-config/zap-options)
+            TARGET=http://staging.hamza-builds.info/
+            #OPTIONS=$(cat /zap-config/zap-options)
 
-            echo "Starting ZAP baseline scan for $TARGET with config $CONFIG_FILE and options $OPTIONS"
+            echo "Starting ZAP full scan for $TARGET with options $OPTIONS"
             mkdir -p /zap/wrk
 
             zap-full-scan.py \
               -t "$TARGET" \
               -r /zap/wrk/zap-report.html \
               -J /zap/wrk/zap-report.json \
-              $OPTIONS
 
             echo "ZAP scan completed. Reports are stored in /zap/wrk/"
         volumeMounts:
-        - name: zap-config
-          mountPath: /zap-config
         - name: zap-reports
           mountPath: /zap/wrk
       volumes:
-      - name: zap-config
-        configMap:
-          name: zap-config
       - name: zap-reports
         emptyDir: {}
