@@ -26,7 +26,7 @@ spec:
             mkdir -p /zap/wrk
 
             # Copy config file to work dir
-            cp /zap-config/zap_config.yml /zap/wrk/config/zap_config.yml
+            cp scanners/zap_config.yml /zap/wrk/config/zap_config.yml
 
             # Run ZAP baseline scan
             zap-baseline.py -t "$TARGET" -c /zap/wrk/config/zap_config.yml -r /zap/wrk/zap-report.html -j /zap/wrk/zap-report.json $OPTIONS
