@@ -201,80 +201,73 @@ jobs:
             curl -v --fail --connect-timeout 10 --max-time 30 \"http://demo-app-svc.app-test.svc.cluster.local:80\" || echo \"Service DNS failed\"; \
           " || echo "Connectivity test failed"
 
-      - name: Run ZAP scan
+      - name: Run ZAP scan (Direct Docker)
         continue-on-error: true
         run: |
-          export KUBECONFIG=kubeconfig
-          mkdir -p scanners
           TARGET_URL="http://staging.hamza-builds.info/"
-          echo "$TARGET_URL" > scanners/target-url
-
-          # Clean up any previous ZAP scan jobs
-          kubectl delete job zap-scan -n app-test --ignore-not-found=true
+          echo "Running ZAP scan against $TARGET_URL"
           
-          # Wait a moment for cleanup
-          sleep 5
+          # Create default empty reports first
+          echo '{"site":[{"@name":"'"$TARGET_URL"'","@host":"staging.hamza-builds.info","@port":"80","@ssl":"false","alerts":[]}]}' > zap-report.json
+          echo "<html><body><h1>ZAP Report</h1><p>No scan data</p></body></html>" > zap-report.html
           
-          # Apply the ZAP job
-          kubectl apply -f scanners/zap-job.yaml
-
-          # Wait for the job to complete with extended timeout
-          echo "Waiting for ZAP scan to complete (up to 30 minutes)..."
-          if kubectl wait --for=condition=complete job/zap-scan -n app-test --timeout=1800s; then
-            echo "ZAP scan completed successfully"
-          else
-            echo "ZAP scan failed or timed out, checking status..."
-            kubectl describe job zap-scan -n app-test
-            kubectl get pods -n app-test -l job-name=zap-scan
-            kubectl logs -n app-test -l job-name=zap-scan --tail=50
-          fi
-
-          # Get the pod name (should exist even if job failed)
-          POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o jsonpath="{.items[0].metadata.name}" 2>/dev/null)
+          # Test connectivity first
+          echo "=== Testing target connectivity ==="
+          curl -I "$TARGET_URL" --connect-timeout 10 --max-time 30 || echo "WARNING: Target may not be reachable"
           
-          if [ -n "$POD_NAME" ]; then
-            echo "Found ZAP pod: $POD_NAME"
-            
-            # Check pod status
-            POD_STATUS=$(kubectl get pod $POD_NAME -n app-test -o jsonpath="{.status.phase}")
-            echo "Pod status: $POD_STATUS"
-            
-            # Try to copy reports regardless of pod status
-            echo "Attempting to copy ZAP reports..."
-            kubectl cp app-test/$POD_NAME:/zap/wrk/zap-report.json zap-report.json 2>/dev/null || {
-              echo "Failed to copy JSON report, creating empty one"
-              echo '{"site":[{"@name":"","@host":"","@port":"","@ssl":"","alerts":[]}]}' > zap-report.json
-            }
-            
-            kubectl cp app-test/$POD_NAME:/zap/wrk/zap-report.html zap-report.html 2>/dev/null || {
-              echo "Failed to copy HTML report, creating empty one"
-              echo "<html><body><h1>ZAP Report</h1><p>No data available</p></body></html>" > zap-report.html
-            }
-            
-            # Show pod logs for debugging
-            echo "=== ZAP Pod Logs (last 100 lines) ==="
-            kubectl logs $POD_NAME -n app-test --tail=100 || echo "Could not get pod logs"
-            
-          else
-            echo "No ZAP pod found, creating empty reports"
-            echo '{"site":[{"@name":"","@host":"","@port":"","@ssl":"","alerts":[]}]}' > zap-report.json
-            echo "<html><body><h1>ZAP Report</h1><p>No scan data</p></body></html>" > zap-report.html
-          fi
-
-          # Check if we got valid reports
-          echo "=== ZAP Report Status ==="
+          # Run ZAP scan directly with Docker (most reliable method)
+          echo "=== Starting ZAP Full Scan ==="
+          docker run --rm \
+            -v $(pwd):/zap/wrk:rw \
+            --user $(id -u):$(id -g) \
+            zaproxy/zap-stable \
+            zap-full-scan.py \
+            -t "$TARGET_URL" \
+            -r /zap/wrk/zap-report.html \
+            -J /zap/wrk/zap-report.json \
+            -I 2>&1 | tee zap-scan.log || echo "ZAP scan completed with exit code: $?"
+          
+          # Verify the reports were created
+          echo "=== ZAP Scan Results ==="
           if [ -f zap-report.json ]; then
-            echo "JSON report size: $(wc -c < zap-report.json) bytes"
-            echo "JSON report preview:"
-            jq -r '.site[0].alerts[:3] | length' zap-report.json 2>/dev/null || echo "Invalid JSON format"
+            JSON_SIZE=$(wc -c < zap-report.json)
+            echo "JSON report size: $JSON_SIZE bytes"
+            
+            if [ "$JSON_SIZE" -gt 1000 ]; then
+              echo "✅ Valid JSON report generated"
+              # Show number of alerts found
+              ALERT_COUNT=$(jq -r '.site[0].alerts | length' zap-report.json 2>/dev/null || echo "unknown")
+              echo "Number of alerts found: $ALERT_COUNT"
+              
+              # Show alert types
+              if [ "$ALERT_COUNT" != "0" ] && [ "$ALERT_COUNT" != "unknown" ]; then
+                echo "Alert types found:"
+                jq -r '.site[0].alerts[] | "- \(.name) (\(.riskdesc))"' zap-report.json 2>/dev/null | head -5
+              fi
+            else
+              echo "⚠️ JSON report seems empty or small"
+            fi
+          else
+            echo "❌ JSON report not found"
           fi
           
           if [ -f zap-report.html ]; then
-            echo "HTML report size: $(wc -c < zap-report.html) bytes"
+            HTML_SIZE=$(wc -c < zap-report.html)
+            echo "HTML report size: $HTML_SIZE bytes"
+            if [ "$HTML_SIZE" -gt 1000 ]; then
+              echo "✅ Valid HTML report generated"
+            else
+              echo "⚠️ HTML report seems empty or small"
+            fi
+          else
+            echo "❌ HTML report not found"
           fi
-
-          # Clean up the job after we're done
-          kubectl delete job zap-scan -n app-test --ignore-not-found=true
+          
+          # Show scan log for debugging if needed
+          if [ -f zap-scan.log ]; then
+            echo "=== ZAP Scan Log Summary (last 20 lines) ==="
+            tail -n 20 zap-scan.log
+          fi
 
       - name: Merge findings
         run: |
@@ -343,6 +336,7 @@ jobs:
             sca.json
             sbom.json
             gate.json
+            zap-scan.log
 
       - name: Clean up kubeconfig
         if: always()
