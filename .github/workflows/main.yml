@@ -215,11 +215,11 @@ jobs:
           kubectl delete job zap-scan -n app-test --ignore-not-found=true
           kubectl apply -f scanners/zap-job.yaml
 
-          #kubectl wait --for=condition=complete job/zap-scan -n app-test --timeout=1800s || {
-          #  echo "ZAP scan failed or timed out"
-          #  kubectl describe job zap-scan -n app-test
-          #  kubectl logs -n app-test -l job-name=zap-scan --tail=100
-          #}
+          kubectl wait --for=condition=complete job/zap-scan -n app-test --timeout=1800s || {
+            echo "ZAP scan failed or timed out"
+            kubectl describe job zap-scan -n app-test
+            kubectl logs -n app-test -l job-name=zap-scan --tail=100
+          }
 
 
           POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o jsonpath="{.items[0].metadata.name}")
