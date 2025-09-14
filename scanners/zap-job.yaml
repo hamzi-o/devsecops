@@ -27,7 +27,7 @@ spec:
             zap-full-scan.py \
               -t "$TARGET" \
               -r /zap/wrk/zap-report.html \
-              -J /zap/wrk/zap-report.json || true
+              -J /zap/wrk/zap-report.json
 
             echo "=== Preview of ZAP JSON report ==="
             head -n 50 /zap/wrk/zap-report.json || echo "No JSON report found"
@@ -37,7 +37,6 @@ spec:
 
             # 🔴 Keep container alive for 5 minutes so GitHub can kubectl cp
             echo "Sleeping to allow report copy..."
-            sleep 300
 
         volumeMounts:
         - name: zap-reports

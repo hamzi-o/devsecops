@@ -226,6 +226,13 @@ jobs:
           kubectl cp app-test/$POD_NAME:/zap/wrk/zap-report.json zap-report.json || echo "{}" > zap-report.json
           kubectl cp app-test/$POD_NAME:/zap/wrk/zap-report.html zap-report.html || echo "<html><body>No report</body></html>" > zap-report.html
 
+          # Preview first 5 findings for debugging
+          echo "=== Preview of ZAP JSON report (first 5 findings) ==="
+          jq '.site[0].alerts[:5]' zap-report.json || echo "No JSON data"
+
+          echo "=== Preview of ZAP HTML report (first 20 lines) ==="
+          head -n 20 zap-report.html
+
       - name: Merge findings
         run: |
           source venv/bin/activate
