@@ -1,1 +1,4 @@
--c /zap/wrk/config/zap_config.yml
+-t http://staging.hamza-builds.info/
+-r /zap/wrk/zap-report.html
+-J /zap/wrk/zap-report.json
+--active-scan true

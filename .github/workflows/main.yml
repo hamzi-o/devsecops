@@ -204,7 +204,6 @@ jobs:
           kubectl create configmap zap-config \
             --from-file=target-url=scanners/target-url \
             --from-file=zap-options=scanners/zap-options \
-            --from-file=zap_config.yml=scanners/zap_config.yml \
             -n app-test --dry-run=client -o yaml | kubectl apply -f -
 
           kubectl delete job zap-scan -n app-test --ignore-not-found=true

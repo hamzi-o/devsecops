@@ -26,12 +26,11 @@ spec:
             echo "Starting ZAP baseline scan for $TARGET with config $CONFIG_FILE and options $OPTIONS"
             mkdir -p /zap/wrk
 
-            zap-baseline.py \
+            zap-full-scan.py \
               -t "$TARGET" \
-              -c "$CONFIG_FILE" \
-              $OPTIONS \
               -r /zap/wrk/zap-report.html \
-              -J /zap/wrk/zap-report.json
+              -J /zap/wrk/zap-report.json \
+              $OPTIONS
 
             echo "ZAP scan completed. Reports are stored in /zap/wrk/"
         volumeMounts:
