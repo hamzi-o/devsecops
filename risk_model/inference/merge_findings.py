@@ -67,32 +67,47 @@ def parse_iac(file):
             
             results = []
             
-            # Handle different Checkov output formats
-            if "results" in data:
-                # Standard Checkov format
-                for finding in data["results"]:
-                    if isinstance(finding, dict):
-                        results.append({
-                            "type": "iac",
-                            "title": finding.get("check_id", "Unknown"),
-                            "location": finding.get("file_path", "N/A"),
-                            "severity": finding.get("severity", "LOW"),
-                            "description": finding.get("check_name", ""),
-                            "line": finding.get("file_line_range", [0])[0] if finding.get("file_line_range") else 0
-                        })
-            elif "check_type" in data:
-                # Alternative Checkov format
-                failed_checks = data.get("results", {}).get("failed_checks", [])
-                for finding in failed_checks:
-                    if isinstance(finding, dict):
-                        results.append({
-                            "type": "iac",
-                            "title": finding.get("check_id", "Unknown"),
-                            "location": finding.get("file_path", "N/A"),
-                            "severity": finding.get("severity", "MEDIUM"),
-                            "description": finding.get("check_name", ""),
-                            "line": finding.get("file_line_range", [0])[0] if finding.get("file_line_range") else 0
-                        })
+            # Handle Checkov output format
+            failed_checks = []
+            
+            if "check_type" in data and "results" in data:
+                # Standard Checkov format: {"check_type": "kubernetes", "results": {"failed_checks": [...], "passed_checks": [...]}}
+                failed_checks = data["results"].get("failed_checks", [])
+            elif "results" in data and isinstance(data["results"], dict):
+                # Alternative format where results is directly a dict
+                failed_checks = data["results"].get("failed_checks", [])
+            elif "results" in data and isinstance(data["results"], list):
+                # Format where results is directly a list of findings
+                failed_checks = data["results"]
+            elif "failed_checks" in data:
+                # Direct failed_checks format
+                failed_checks = data["failed_checks"]
+            elif isinstance(data, list):
+                # Direct list format
+                failed_checks = data
+            
+            # Process failed checks
+            for finding in failed_checks:
+                if isinstance(finding, dict):
+                    # Map severity - Checkov doesn't always provide explicit severity
+                    severity = finding.get("severity", "MEDIUM")
+                    if not severity or severity == "":
+                        # Infer severity from check name or type
+                        check_name = finding.get("check_name", "").lower()
+                        if any(keyword in check_name for keyword in ["privilege", "root", "admin", "security", "secret"]):
+                            severity = "HIGH"
+                        else:
+                            severity = "MEDIUM"
+                    
+                    results.append({
+                        "type": "iac",
+                        "title": finding.get("check_id", "Unknown"),
+                        "location": finding.get("file_path", "N/A"),
+                        "severity": severity,
+                        "description": finding.get("check_name", ""),
+                        "resource": finding.get("resource", ""),
+                        "line": finding.get("file_line_range", [0])[0] if finding.get("file_line_range") else 0
+                    })
             
             return results
     except (json.JSONDecodeError, Exception) as e:
