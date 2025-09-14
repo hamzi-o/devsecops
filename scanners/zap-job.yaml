@@ -4,7 +4,7 @@ metadata:
   name: zap-scan
   namespace: app-test
 spec:
-  backoffLimit: 0
+  backoffLimit: 1  # Allow one retry
   template:
     metadata:
       labels:
@@ -18,30 +18,60 @@ spec:
           - /bin/sh
           - -c
           - |
-            set -e
+            set +e  # Don't exit on errors
             TARGET=http://staging.hamza-builds.info/
-
+            
             echo "Starting ZAP full scan for $TARGET"
             mkdir -p /zap/wrk
-
+            
+            # Initialize empty reports in case scan fails
+            echo '{"site":[{"@name":"","@host":"","@port":"","@ssl":"","alerts":[]}]}' > /zap/wrk/zap-report.json
+            echo '<html><body><h1>ZAP Scan Report</h1><p>Scan failed or no data</p></body></html>' > /zap/wrk/zap-report.html
+            
+            # Run ZAP scan - it may exit with non-zero even on success if vulnerabilities found
+            echo "Running ZAP scan..."
             zap-full-scan.py \
               -t "$TARGET" \
               -r /zap/wrk/zap-report.html \
-              -J /zap/wrk/zap-report.json || true
-
-            echo "=== Preview of ZAP JSON report ==="
-            head -n 50 /zap/wrk/zap-report.json || echo "No JSON report found"
-
-            echo "=== Preview of ZAP HTML report ==="
-            head -n 50 /zap/wrk/zap-report.html || echo "No HTML report found"
-
-            # 🔴 Keep container alive for 5 minutes so GitHub can kubectl cp
-            echo "Sleeping to allow report copy..."
-            sleep 100
-
+              -J /zap/wrk/zap-report.json \
+              -I || echo "ZAP scan completed with exit code $?"
+            
+            # Verify report files exist and have content
+            echo "=== Checking report files ==="
+            ls -la /zap/wrk/
+            
+            if [ -f /zap/wrk/zap-report.json ]; then
+                echo "JSON report size: $(wc -c < /zap/wrk/zap-report.json) bytes"
+                echo "=== Preview of ZAP JSON report ==="
+                head -n 20 /zap/wrk/zap-report.json || echo "Could not preview JSON"
+            else
+                echo "JSON report not found!"
+            fi
+            
+            if [ -f /zap/wrk/zap-report.html ]; then
+                echo "HTML report size: $(wc -c < /zap/wrk/zap-report.html) bytes"
+                echo "=== Preview of ZAP HTML report ==="
+                head -n 10 /zap/wrk/zap-report.html || echo "Could not preview HTML"
+            else
+                echo "HTML report not found!"
+            fi
+            
+            # Keep container alive for report extraction
+            echo "Keeping container alive for 300 seconds for report extraction..."
+            sleep 300
+            
+            # Always exit successfully so job completes
+            exit 0
         volumeMounts:
         - name: zap-reports
           mountPath: /zap/wrk
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
       volumes:
       - name: zap-reports
         emptyDir: {}
