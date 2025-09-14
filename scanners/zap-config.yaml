@@ -1,34 +1,23 @@
-apiVersion: batch/v1
-kind: Job
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: zap-scan
+  name: zap-config
   namespace: app-test
-spec:
-  backoffLimit: 0
-  template:
-    metadata:
-      labels:
-        app: zap
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: zap
-          image: ghcr.io/zaproxy/zaproxy:2.15.0
-          command:
-            - /bin/sh
-            - -c
-            - |
-              TARGET=$(cat /zap-config/target-url)
-              OPTIONS=$(cat /zap-config/zap-options)
-              zap-baseline.py -t "$TARGET" -c /zap-config/zap-options -r /zap/wrk/zap-report.html -J /zap/wrk/zap-report.json
-          volumeMounts:
-            - name: zap-config
-              mountPath: /zap-config
-            - name: zap-reports
-              mountPath: /zap/wrk
-      volumes:
-        - name: zap-config
-          configMap:
-            name: zap-config
-        - name: zap-reports
-          emptyDir: {}
+data:
+  target-url: "http://staging.hamza-builds.info/"
+  zap-options: ""  # Optional additional CLI options
+  zap_config.yml: |
+    --- # ZAP Baseline Scan Configuration
+    spider:
+      maxDepth: 5
+      maxChildren: 0
+      parseComments: true
+      parseRobotsTxt: true
+      parseSitemapXml: true
+      acceptCookies: true
+      handleParameters: 0
+    reporter:
+      format: JSON
+      template: traditionalhtml
+      reportDir: /zap/wrk/
+      reportName: zap-report

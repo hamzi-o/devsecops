@@ -4,37 +4,42 @@ metadata:
   name: zap-scan
   namespace: app-test
 spec:
+  backoffLimit: 0
   template:
+    metadata:
+      labels:
+        app: zap
     spec:
       restartPolicy: Never
       containers:
-        - name: zap
-          image: zaproxy/zap-stable
-          imagePullPolicy: Always
-          command:
-            - sh
-            - -c
-            - |
-              # Read the target URL from ConfigMap
-              TARGET_URL=staging.hamza-builds.info
-              echo "Scanning target: $TARGET_URL"
-              
-              # Run ZAP spider and active scan
-              zap.sh -daemon -host 0.0.0.0 -port 8080 -config api.disablekey=true
-              sleep 10
-              zap-cli --zap-url http://localhost:8080 status -t 120
-              zap-cli --zap-url http://localhost:8080 spider $TARGET_URL
-              zap-cli --zap-url http://localhost:8080 active-scan $TARGET_URL
-              zap-cli --zap-url http://localhost:8080 report -o /zap/wrk/zap-report.json -f json
-              zap-cli --zap-url http://localhost:8080 report -o /zap/wrk/zap-report.html -f html
-          volumeMounts:
-            - name: zap-config
-              mountPath: /zap-config
-            - name: zap-work
-              mountPath: /zap/wrk
-      volumes:
+      - name: zap
+        image: zaproxy/zap-stable
+        command:
+          - /bin/sh
+          - -c
+          - |
+            TARGET=$(cat /zap-config/target-url)
+            OPTIONS=$(cat /zap-config/zap-options)
+            echo "Starting ZAP baseline scan for $TARGET with options: $OPTIONS"
+
+            # Ensure output directory exists
+            mkdir -p /zap/wrk
+
+            # Copy config file to work dir
+            cp /zap-config/zap_config.yml /zap/wrk/config/zap_config.yml
+
+            # Run ZAP baseline scan
+            zap-baseline.py -t "$TARGET" -c /zap/wrk/config/zap_config.yml -r /zap/wrk/zap-report.html -j /zap/wrk/zap-report.json $OPTIONS
+
+            echo "ZAP scan completed. Reports saved in /zap/wrk/"
+        volumeMounts:
         - name: zap-config
-          configMap:
-            name: zap-config
-        - name: zap-work
-          emptyDir: {}
+          mountPath: /zap-config
+        - name: zap-reports
+          mountPath: /zap/wrk
+      volumes:
+      - name: zap-config
+        configMap:
+          name: zap-config
+      - name: zap-reports
+        emptyDir: {}

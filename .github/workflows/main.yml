@@ -196,26 +196,42 @@ jobs:
           mkdir -p scanners
           TARGET_URL="http://staging.hamza-builds.info/"
           echo "$TARGET_URL" > scanners/target-url
-          echo "-c /zap/wrk/config/zap_config.yml" > scanners/zap-options
+          echo "" > scanners/zap-options
 
-          # Create ConfigMap
+          # Create ZAP configuration
+          cat > scanners/zap_config.yml << 'EOF'
+          --- 
+          spider:
+            maxDepth: 5
+            maxChildren: 0
+            parseComments: true
+            parseRobotsTxt: true
+            parseSitemapXml: true
+            acceptCookies: true
+            handleParameters: 0
+          reporter:
+            format: JSON
+            template: traditionalhtml
+            reportDir: /zap/wrk/
+            reportName: zap-report
+          EOF
+
+          # Apply ConfigMap
           kubectl create configmap zap-config \
             --from-file=target-url=scanners/target-url \
             --from-file=zap-options=scanners/zap-options \
+            --from-file=zap_config.yml=scanners/zap_config.yml \
             -n app-test --dry-run=client -o yaml | kubectl apply -f -
 
-          # Apply ZAP Job
           kubectl delete job zap-scan -n app-test --ignore-not-found=true
           kubectl apply -f scanners/zap-job.yaml
 
-          # Wait for Job to complete
           kubectl wait --for=condition=complete job/zap-scan -n app-test --timeout=1800s || {
             echo "ZAP scan failed or timed out"
             kubectl describe job zap-scan -n app-test
             kubectl logs -n app-test -l job-name=zap-scan --tail=100
           }
 
-          # Copy reports
           POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o jsonpath="{.items[0].metadata.name}")
           kubectl cp app-test/$POD_NAME:/zap/wrk/zap-report.json zap-report.json || echo "{}" > zap-report.json
           kubectl cp app-test/$POD_NAME:/zap/wrk/zap-report.html zap-report.html || echo "<html><body>No report</body></html>" > zap-report.html
