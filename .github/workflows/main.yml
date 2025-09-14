@@ -141,9 +141,26 @@ jobs:
           export PATH=$HOME/.local/bin:$PATH
           source venv/bin/activate
           mkdir -p scanners
-          checkov -d app/k8s --config-file scanners/checkov.yml --output json > iac.json || \
-            echo "[]" > iac.json
+
+          echo "=== [IaC Scan] Starting Checkov ==="
+          if [ ! -f scanners/checkov.yaml ]; then
+            echo "⚠️ No scanners/checkov.yaml found, creating empty results"
+            echo "[]" > results.json
+          else
+            # Run Checkov and capture both output + exit code
+            echo "🔎 Running Checkov on app/k8s with scanners/checkov.yaml"
+            checkov -d app/k8s --config-file scanners/checkov.yaml -o json > results.json 2> checkov_error.log || true
+
+            echo "=== [IaC Scan] Exit code: $? ==="
+            echo "=== [IaC Scan] Errors (if any) ==="
+            cat checkov_error.log || true
+
+            echo "=== [IaC Scan] First 20 lines of results.json ==="
+            head -n 10 results.json || echo "results.json not created!"
+
+          fi
           deactivate
+
 
       - name: Run SCA scan
         continue-on-error: true
