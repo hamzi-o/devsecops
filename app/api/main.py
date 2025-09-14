@@ -1,69 +1,73 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
+from pydantic import BaseModel
 import hashlib
 import subprocess
-import base64
-import pickle
-import urllib.request
 
-app = FastAPI(title="Critical Vulnerable Demo API")
+app = FastAPI(title="Adaptive DevSecOps Demo")
+app = FastAPI(title="Light Vulnerable DevSecOps Demo API")
 
-# Hardcoded secrets
+class Echo(BaseModel):
+    data: dict | None = None
+# --- Hardcoded secrets ---
+DATABASE_PASSWORD = "admin123!@#"
 API_KEY = "sk-1234567890abcdef"
 JWT_SECRET = "super_secret_jwt_key_2024"
 
+# --- Pydantic models ---
+class CommandRequest(BaseModel):
+    command: str
+
+# --- Routes ---
 @app.get("/")
 def root():
-    return {"message": "Critical Vulnerable Demo API"}
+    return {"message": "Welcome to the Adaptive DevSecOps Demo API"}
 
-# Reflected XSS
+    return {"message": "Welcome to the Lightweight Vulnerable Demo API"}
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "service": "devsecops-demo"}
+    return {"status": "ok"}
+
 @app.get("/greet/{name}")
 def greet(name: str):
+    # Reflected XSS
     return {"message": f"Hello, {name}!"}
 
-# Info disclosure
-@app.get("/debug")
-def debug_info():
-    return {"api_key": API_KEY, "jwt_secret": JWT_SECRET}
+@app.post("/echo")
+def echo(payload: Echo):
+    return {"echo": payload.data or {}}
 
-# Weak session token
-@app.get("/session")
-def create_session(username: str):
-    token = hashlib.md5(username.encode()).hexdigest()
-    return {"session_token": token}
-
-# Command injection (safe runtime)
+@app.get("/items/{item_id}")
+def get_item(item_id: int):
+    return {"item_id": item_id, "ok": True}
 @app.post("/system")
-def system_command(cmd: str):
+def system_command(cmd: CommandRequest):
+    # Command Injection
     try:
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+        result = subprocess.run(cmd.command, shell=True, capture_output=True, text=True)
         return {"output": result.stdout, "error": result.stderr}
     except Exception as e:
         return {"error": str(e)}
 
-# Deserialization RCE (only triggers on request)
-@app.post("/deserialize")
-async def deserialize_data(request: Request):
-    body = await request.body()
-    try:
-        data = pickle.loads(base64.b64decode(body))
-        return {"deserialized": str(data)}
-    except Exception as e:
-        return {"error": str(e)}
+@app.get("/debug")
+def debug_info():
+    # Information Disclosure
+    return {"database_password": DATABASE_PASSWORD, "api_key": API_KEY}
 
-# SSRF
-@app.get("/fetch")
-def fetch_url(url: str):
-    try:
-        with urllib.request.urlopen(url, timeout=5) as response:
-            content = response.read().decode()[:500]
-        return {"content": content}
-    except Exception as e:
-        return {"error": str(e)}
+@app.get("/session")
+def create_session(username: str):
+    # Weak session token
+    token = hashlib.md5(username.encode()).hexdigest()
+    return {"session_token": token}
 
-# Missing authentication
 @app.get("/admin")
+def admin():
+    raise HTTPException(status_code=403, detail="Forbidden")
 def admin_access():
-    return {"admin_data": "Sensitive admin info", "users": ["admin", "user1"]}
+    # Missing authentication
+    return {"admin_data": "Sensitive admin information", "users": ["admin", "user1"]}
 
 if __name__ == "__main__":
     import uvicorn
