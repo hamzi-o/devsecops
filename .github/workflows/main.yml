@@ -232,7 +232,7 @@ jobs:
           python3 risk_model/inference/merge_findings.py \
             --sast sast.json \
             --secrets secrets.json \
-            --iac iac.json \
+            --iac results.json \
             --sca sca.json \
             --dast zap-report.json \
             --out findings.jsonl
@@ -287,7 +287,7 @@ jobs:
             enriched.jsonl
             zap-report.json
             zap-report.html
-            scanners/results/results.json
+            results.json
             sast.json
             secrets.json
             sca.json
