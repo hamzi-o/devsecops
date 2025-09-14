@@ -242,7 +242,7 @@ jobs:
           python3 risk_model/inference/merge_findings.py \
             --sast sast.json \
             --secrets secrets.json \
-            --iac scanners/results.json \
+            --iac scanners/results.json/results.json.json \
             --sca sca.json \
             --dast zap-report.json \
             --out findings.jsonl
