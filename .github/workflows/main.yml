@@ -196,25 +196,20 @@ jobs:
           mkdir -p scanners
           TARGET_URL="http://staging.hamza-builds.info/"
           echo "$TARGET_URL" > scanners/target-url
-          echo "" > scanners/zap-options
 
-          # Create ZAP configuration
+          # Set ZAP options (JSON + HTML report + config file)
+          echo "-J /zap/wrk/zap-report.json -r /zap/wrk/zap-report.html -c /zap-config/zap_config.yml" > scanners/zap-options
+
+          # Create ZAP configuration (tab-separated format)
           cat > scanners/zap_config.yml << 'EOF'
-          --- 
-          spider:
-            maxDepth: 5
-            maxChildren: 0
-            parseComments: true
-            parseRobotsTxt: true
-            parseSitemapXml: true
-            acceptCookies: true
-            handleParameters: 0
-          reporter:
-            format: JSON
-            template: traditionalhtml
-            reportDir: /zap/wrk/
-            reportName: zap-report
-          EOF
+spider	maxDepth	5
+spider	maxChildren	0
+spider	parseComments	true
+spider	parseRobotsTxt	true
+spider	parseSitemapXml	true
+spider	acceptCookies	true
+spider	handleParameters	0
+EOF
 
           # Apply ConfigMap
           kubectl create configmap zap-config \
@@ -231,6 +226,7 @@ jobs:
             kubectl describe job zap-scan -n app-test
             kubectl logs -n app-test -l job-name=zap-scan --tail=100
           }
+
 
           POD_NAME=$(kubectl get pod -n app-test -l job-name=zap-scan -o jsonpath="{.items[0].metadata.name}")
           kubectl cp app-test/$POD_NAME:/zap/wrk/zap-report.json zap-report.json || echo "{}" > zap-report.json
