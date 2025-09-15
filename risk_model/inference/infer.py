@@ -108,7 +108,7 @@ class VulnPrioritizer:
                     dropout=self.best_params.get('dropout', 0.3)
                 )
                 
-                self.model.load_state_dict(checkpoint['model_state_dict'])
+                self.model = torch.load(checkpoint_path, map_location=self.device)
                 self.model.to(self.device)
                 self.model.eval()
                 
