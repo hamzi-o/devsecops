@@ -443,7 +443,7 @@ def calculate_hybrid_risk_score(finding: Dict[str, Any]) -> tuple[float, str]:
         return round(base_score, 2), priority
     
     # Fallback to heuristic scoring
-    print("📊 Using heuristic scoring (GCN not available/low confidence)")
+    print("📊 Using heuristic scoring ")
     
     # Base scores
     cvss = finding.get('cvss_score', 0.0)
@@ -497,9 +497,9 @@ def calculate_hybrid_risk_score(finding: Dict[str, Any]) -> tuple[float, str]:
     risk_score = min(risk_score, 10.0)
     
     # Determine priority
-    if risk_score >= 8.5 or is_kev or (cvss >= 9.0) or (has_exploit and cvss >= 7.0):
+    if risk_score >= 8.0 or is_kev or (cvss >= 8.0) or (has_exploit and cvss >= 7.0):
         priority = 'Critical'
-    elif risk_score >= 7.0 or (cvss >= 7.0) or (epss > 0.3) or (is_owasp and cvss >= 6.0):
+    elif risk_score >= 6.5 or (cvss >= 7.0) or (epss > 0.3) or (is_owasp and cvss >= 6.0):
         priority = 'High'
     elif risk_score >= 4.0 or (cvss >= 4.0) or (epss > 0.1) or is_owasp:
         priority = 'Medium'
@@ -979,7 +979,7 @@ def main():
     findings = prioritizer.predict_priority(findings)
 
     # Second pass: Enhance with OpenAI analysis
-    print("\n🤖 Phase 2: OpenAI Enhancement")
+    print("\n🤖 Phase 2: Enhancement")
     processed_count = 0
     for idx, finding in enumerate(findings, 1):
         if processed_count >= args.max_requests:
