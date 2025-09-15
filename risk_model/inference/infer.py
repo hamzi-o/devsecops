@@ -23,14 +23,14 @@ class VulnGCN(nn.Module):
         super(VulnGCN, self).__init__()
         self.num_layers = num_layers
         self.dropout = dropout
-        
+
         # GCN layers
         self.convs = nn.ModuleList()
         self.convs.append(GCNConv(num_features, hidden_dim))
         for _ in range(num_layers - 2):
             self.convs.append(GCNConv(hidden_dim, hidden_dim))
         self.convs.append(GCNConv(hidden_dim, hidden_dim))
-        
+
         # Classification head
         self.classifier = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -38,7 +38,7 @@ class VulnGCN(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_dim // 2, num_classes)
         )
-        
+
     def forward(self, x, edge_index, batch):
         # Graph convolutions
         for i, conv in enumerate(self.convs):
@@ -46,10 +46,10 @@ class VulnGCN(nn.Module):
             if i < len(self.convs) - 1:
                 x = F.relu(x)
                 x = F.dropout(x, p=self.dropout, training=self.training)
-        
+
         # Global pooling
         x = global_mean_pool(x, batch)
-        
+
         # Classification
         x = self.classifier(x)
         return x
@@ -62,9 +62,9 @@ class VulnPrioritizer:
         self.scaler = None
         self.best_params = None
         self.priority_mapping = {0: 'Low', 1: 'Medium', 2: 'High', 3: 'Critical'}
-        
+
         self.load_model_artifacts()
-    
+
     def load_model_artifacts(self):
         """Load trained model, scaler, and parameters."""
         try:
@@ -76,7 +76,7 @@ class VulnPrioritizer:
                 print(f"✅ Loaded scaler from {scaler_path}")
             else:
                 print(f"⚠️ Scaler not found at {scaler_path}")
-            
+
             # Load best parameters
             params_path = self.artifacts_dir / 'best_params.pkl'
             if params_path.exists():
@@ -92,12 +92,12 @@ class VulnPrioritizer:
                     'dropout': 0.3,
                     'num_classes': 4
                 }
-            
+
             # Load model checkpoint
             checkpoint_path = self.artifacts_dir / 'vuln_prioritizer_checkpoint.pt'
             if checkpoint_path.exists():
                 checkpoint = torch.load(checkpoint_path, map_location=self.device)
-                
+
                 # Initialize model with parameters
                 num_features = checkpoint.get('num_features', 50)  # Default feature size
                 self.model = VulnGCN(
@@ -107,30 +107,31 @@ class VulnPrioritizer:
                     num_layers=self.best_params.get('num_layers', 3),
                     dropout=self.best_params.get('dropout', 0.3)
                 )
-                
+
+                self.model.load_state_dict(checkpoint['model_state_dict'])
                 self.model = torch.load(checkpoint_path, map_location=self.device)
                 self.model.to(self.device)
                 self.model.eval()
-                
+
                 print(f"✅ Loaded GCN model from {checkpoint_path}")
                 print(f"   📊 Model features: {num_features}")
                 print(f"   🏗️ Architecture: {self.best_params}")
             else:
                 print(f"❌ Model checkpoint not found at {checkpoint_path}")
-                
+
         except Exception as e:
             print(f"❌ Error loading model artifacts: {e}")
             self.model = None
-    
+
     def extract_vulnerability_features(self, finding: Dict[str, Any]) -> np.ndarray:
         """Extract numerical features from vulnerability finding."""
         features = []
-        
+
         # Basic severity mapping
         severity_map = {'low': 1, 'medium': 2, 'high': 3, 'critical': 4, 'info': 0}
         severity = finding.get('severity', 'medium').lower()
         features.append(severity_map.get(severity, 2))
-        
+
         # CWE features (extract CWE number if available)
         cwe = finding.get('cwe', '')
         cwe_num = 0
@@ -140,7 +141,7 @@ class VulnPrioritizer:
             except:
                 cwe_num = 0
         features.append(min(cwe_num / 1000, 1.0))  # Normalize
-        
+
         # Vulnerability type features
         vuln_type = finding.get('type', '').lower()
         type_features = [
@@ -151,7 +152,7 @@ class VulnPrioritizer:
             1 if vuln_type == 'iac' else 0
         ]
         features.extend(type_features)
-        
+
         # Location-based features
         location = finding.get('location', '').lower()
         location_features = [
@@ -162,7 +163,7 @@ class VulnPrioritizer:
             1 if any(term in location for term in ['crypto', 'ssl', 'tls', 'cert']) else 0
         ]
         features.extend(location_features)
-        
+
         # Title/description based features (simple keyword matching)
         text_content = f"{finding.get('title', '')} {finding.get('description', '')}".lower()
         text_features = [
@@ -176,18 +177,18 @@ class VulnPrioritizer:
             1 if any(term in text_content for term in ['weak', 'broken', 'insecure']) else 0
         ]
         features.extend(text_features)
-        
+
         # Add CVSS/EPSS if available (will be updated after OpenAI analysis)
         cvss_score = finding.get('cvss_score', 0.0)
         epss_score = finding.get('epss_score', 0.0)
         features.extend([cvss_score / 10.0, epss_score])  # Normalize CVSS
-        
+
         # KEV and exploit features
         features.extend([
             1 if finding.get('kev_status') == 'YES' else 0,
             1 if finding.get('exploit_available') == 'YES' else 0
         ])
-        
+
         # OWASP Top 10 mapping
         owasp = finding.get('owasp_2021', 'N/A')
         owasp_features = [0] * 10  # A01-A10
@@ -199,42 +200,42 @@ class VulnPrioritizer:
             except:
                 pass
         features.extend(owasp_features)
-        
+
         # Temporal features
         current_year = datetime.now().year
         features.append(current_year / 2030.0)  # Normalize year
-        
+
         # Pad or truncate to expected feature size (50 features)
         target_size = 50
         if len(features) < target_size:
             features.extend([0.0] * (target_size - len(features)))
         elif len(features) > target_size:
             features = features[:target_size]
-        
+
         return np.array(features, dtype=np.float32)
-    
+
     def create_graph_from_findings(self, findings: List[Dict[str, Any]]) -> Data:
         """Create a graph representation from vulnerability findings."""
         if not findings:
             return None
-        
+
         # Extract features for each finding
         node_features = []
         for finding in findings:
             features = self.extract_vulnerability_features(finding)
             node_features.append(features)
-        
+
         node_features = np.array(node_features)
-        
+
         # Create edges based on similarity (simple heuristic)
         edge_indices = []
         num_nodes = len(findings)
-        
+
         for i in range(num_nodes):
             for j in range(i + 1, num_nodes):
                 # Connect nodes if they share similar characteristics
                 f1, f2 = findings[i], findings[j]
-                
+
                 # Same type
                 same_type = f1.get('type') == f2.get('type')
                 # Similar location
@@ -243,51 +244,51 @@ class VulnPrioritizer:
                 similar_location = any(word in loc2 for word in loc1.split()[:3] if len(word) > 3)
                 # Same CWE category
                 same_cwe = f1.get('cwe', '') == f2.get('cwe', '') and f1.get('cwe', '') != ''
-                
+
                 if same_type or similar_location or same_cwe:
                     edge_indices.append([i, j])
                     edge_indices.append([j, i])  # Undirected graph
-        
+
         # If no edges, create a simple chain
         if not edge_indices and num_nodes > 1:
             for i in range(num_nodes - 1):
                 edge_indices.append([i, i + 1])
                 edge_indices.append([i + 1, i])
-        
+
         # Convert to tensors
         x = torch.tensor(node_features, dtype=torch.float32)
         edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous() if edge_indices else torch.empty((2, 0), dtype=torch.long)
-        
+
         return Data(x=x, edge_index=edge_index)
-    
+
     def predict_priority(self, findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Use GCN model to predict vulnerability priorities."""
         if not self.model or not findings:
             print("⚠️ GCN model not available, falling back to heuristic scoring")
             return findings
-        
+
         try:
             # Create graph representation
             graph_data = self.create_graph_from_findings(findings)
             if graph_data is None:
                 return findings
-            
+
             # Move to device and create batch
             graph_data = graph_data.to(self.device)
             batch = torch.zeros(graph_data.x.size(0), dtype=torch.long, device=self.device)
-            
+
             # Run inference
             with torch.no_grad():
                 logits = self.model(graph_data.x, graph_data.edge_index, batch)
                 probabilities = F.softmax(logits, dim=-1)
                 predictions = torch.argmax(logits, dim=-1)
-            
+
             # Update findings with model predictions
             for i, finding in enumerate(findings):
                 if i < len(predictions):
                     pred_class = predictions[i].item()
                     pred_probs = probabilities[i].cpu().numpy()
-                    
+
                     # Update with model predictions
                     finding['gcn_priority'] = self.priority_mapping.get(pred_class, 'Medium')
                     finding['gcn_confidence'] = float(pred_probs.max())
@@ -297,7 +298,7 @@ class VulnPrioritizer:
                         'High': float(pred_probs[2]),
                         'Critical': float(pred_probs[3])
                     }
-                    
+
                     # Calculate GCN-based risk score (0-10 scale)
                     gcn_risk_score = (
                         pred_probs[0] * 2.5 +   # Low -> 2.5
@@ -306,12 +307,12 @@ class VulnPrioritizer:
                         pred_probs[3] * 10.0    # Critical -> 10.0
                     )
                     finding['gcn_risk_score'] = float(gcn_risk_score)
-                    
+
                     print(f"🔮 GCN Prediction for '{finding['title'][:50]}...': {finding['gcn_priority']} (confidence: {finding['gcn_confidence']:.3f})")
-            
+
             print(f"✅ GCN model processed {len(findings)} findings")
             return findings
-            
+
         except Exception as e:
             print(f"❌ Error in GCN prediction: {e}")
             return findings
@@ -333,7 +334,7 @@ def load_findings(file_path: Path) -> List[Dict[str, Any]]:
 
 def get_enhanced_analysis(finding: Dict[str, Any], client: OpenAI) -> Dict[str, Any]:
     """Get enhanced analysis including CVE, EPSS, CVSS, KEV, and OWASP mapping."""
-    
+
     # Create a detailed prompt with more context
     prompt = f"""
     Analyze this security finding and provide detailed vulnerability intelligence:
@@ -364,7 +365,7 @@ def get_enhanced_analysis(finding: Dict[str, Any], client: OpenAI) -> Dict[str, 
     
     Be specific and accurate. If information is not available or uncertain, use 'N/A' or appropriate defaults.
     """
-    
+
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -375,9 +376,9 @@ def get_enhanced_analysis(finding: Dict[str, Any], client: OpenAI) -> Dict[str, 
             response_format={"type": "json_object"},
             temperature=0.3  # Lower temperature for more consistent results
         )
-        
+
         result = json.loads(response.choices[0].message.content)
-        
+
         # Validate and sanitize the response
         enhanced_data = {
             'cve': result.get('cve', 'N/A'),
@@ -392,9 +393,9 @@ def get_enhanced_analysis(finding: Dict[str, Any], client: OpenAI) -> Dict[str, 
             'remediation_guidance': result.get('remediation_guidance', 'Review and address this finding'),
             'confidence_level': result.get('confidence_level', 'MEDIUM')
         }
-        
+
         return enhanced_data
-        
+
     except Exception as e:
         print(f"Error querying OpenAI for {finding['title']}: {e}")
         return {
@@ -413,19 +414,19 @@ def get_enhanced_analysis(finding: Dict[str, Any], client: OpenAI) -> Dict[str, 
 
 def calculate_hybrid_risk_score(finding: Dict[str, Any]) -> tuple[float, str]:
     """Calculate hybrid risk score combining GCN predictions with heuristics."""
-    
+
     # Start with GCN prediction if available
     if 'gcn_risk_score' in finding and finding.get('gcn_confidence', 0) > 0.5:
         base_score = finding['gcn_risk_score']
         gcn_priority = finding.get('gcn_priority', 'Medium')
         print(f"🤖 Using GCN prediction: {gcn_priority} (score: {base_score:.2f})")
-        
+
         # Apply minor adjustments based on additional factors
         cvss = finding.get('cvss_score', 0.0)
         epss = finding.get('epss_score', 0.0)
         is_kev = finding.get('kev_status', 'NO') == 'YES'
         has_exploit = finding.get('exploit_available', 'NO') == 'YES'
-        
+
         # Boost score for critical external factors
         if is_kev:
             base_score = min(base_score + 1.0, 10.0)
@@ -433,34 +434,34 @@ def calculate_hybrid_risk_score(finding: Dict[str, Any]) -> tuple[float, str]:
             base_score = min(base_score + 0.5, 10.0)
         if epss > 0.5:
             base_score = min(base_score + 0.5, 10.0)
-        
+
         # Use GCN priority but allow critical overrides
         if is_kev or (cvss >= 9.0 and has_exploit):
             priority = 'Critical'
         else:
             priority = gcn_priority
-            
+
         return round(base_score, 2), priority
-    
+
     # Fallback to heuristic scoring
-    print("📊 Using heuristic scoring ")
-    
+    print("📊 Using heuristic scoring (GCN not available/low confidence)")
+
     # Base scores
     cvss = finding.get('cvss_score', 0.0)
     epss = finding.get('epss_score', 0.0)
-    
+
     # Boolean factors
     is_kev = finding.get('kev_status', 'NO') == 'YES'
     has_exploit = finding.get('exploit_available', 'NO') == 'YES'
     is_owasp = finding.get('owasp_2021', 'N/A') != 'N/A'
-    
+
     # Remediation effort factor (inverse - higher effort = higher risk)
     effort_multiplier = {
         'LOW': 0.8,
         'MEDIUM': 1.0,
         'HIGH': 1.3
     }.get(finding.get('remediation_effort', 'MEDIUM'), 1.0)
-    
+
     # Finding type weight
     type_weights = {
         'dast': 1.2,  # Runtime vulnerabilities are more critical
@@ -470,17 +471,17 @@ def calculate_hybrid_risk_score(finding: Dict[str, Any]) -> tuple[float, str]:
         'iac': 0.9    # Infrastructure misconfigurations
     }
     type_weight = type_weights.get(finding.get('type', ''), 1.0)
-    
+
     # Calculate base risk score
     if cvss == 0.0:
         # No CVSS available, use heuristic based on other factors
         base_score = 5.0 if (is_kev or has_exploit or is_owasp) else 3.0
     else:
         base_score = cvss
-    
+
     # Apply modifiers
     risk_score = base_score * type_weight * effort_multiplier
-    
+
     # Add bonus points for critical factors
     if is_kev:
         risk_score += 2.0
@@ -492,27 +493,27 @@ def calculate_hybrid_risk_score(finding: Dict[str, Any]) -> tuple[float, str]:
         risk_score += 0.5
     if is_owasp and cvss >= 7.0:
         risk_score += 1.0
-    
+
     # Cap at 10.0
     risk_score = min(risk_score, 10.0)
-    
+
     # Determine priority
-    if risk_score >= 8.0 or is_kev or (cvss >= 8.0) or (has_exploit and cvss >= 7.0):
+    if risk_score >= 8.5 or is_kev or (cvss >= 9.0) or (has_exploit and cvss >= 7.0):
         priority = 'Critical'
-    elif risk_score >= 6.5 or (cvss >= 7.0) or (epss > 0.3) or (is_owasp and cvss >= 6.0):
+    elif risk_score >= 7.0 or (cvss >= 7.0) or (epss > 0.3) or (is_owasp and cvss >= 6.0):
         priority = 'High'
     elif risk_score >= 4.0 or (cvss >= 4.0) or (epss > 0.1) or is_owasp:
         priority = 'Medium'
     else:
         priority = 'Low'
-    
+
     return round(risk_score, 2), priority
 
 def categorize_finding(finding: Dict[str, Any]) -> str:
     """Categorize finding by type and location."""
     finding_type = finding.get('type', '').lower()
     location = finding.get('location', '').lower()
-    
+
     if finding_type == 'dast':
         return 'App'
     elif finding_type == 'secrets':
@@ -531,69 +532,69 @@ def categorize_finding(finding: Dict[str, Any]) -> str:
 
 def generate_executive_summary(findings: List[Dict[str, Any]]) -> str:
     """Generate executive summary paragraph."""
-    
+
     total = len(findings)
     if total == 0:
         return "No security findings were identified in this assessment."
-    
+
     # Count by priority
     priority_counts = {}
     category_counts = {}
     owasp_findings = 0
     kev_findings = 0
     gcn_processed = 0
-    
+
     for finding in findings:
         priority = finding.get('priority', 'Unknown')
         category = finding.get('category', 'Unknown')
-        
+
         priority_counts[priority] = priority_counts.get(priority, 0) + 1
         category_counts[category] = category_counts.get(category, 0) + 1
-        
+
         if finding.get('owasp_2021', 'N/A') != 'N/A':
             owasp_findings += 1
         if finding.get('kev_status', 'NO') == 'YES':
             kev_findings += 1
         if 'gcn_priority' in finding:
             gcn_processed += 1
-    
+
     # Build summary
     summary_parts = []
     summary_parts.append(f"This AI-enhanced security assessment analyzed {total} findings using Graph Convolutional Networks trained on vulnerability databases (DiversVul, Devign, CVE, NVD, EPSS).")
-    
+
     if gcn_processed > 0:
         summary_parts.append(f"{gcn_processed} findings were processed through the trained GCN model for intelligent risk prioritization.")
-    
+
     if priority_counts.get('Critical', 0) > 0:
         summary_parts.append(f"{priority_counts['Critical']} critical vulnerabilities require immediate attention.")
-    
+
     if priority_counts.get('High', 0) > 0:
         summary_parts.append(f"{priority_counts['High']} high-priority issues should be addressed within the next sprint.")
-    
+
     if kev_findings > 0:
         summary_parts.append(f"{kev_findings} findings are listed in CISA's Known Exploited Vulnerabilities (KEV) catalog, indicating active exploitation in the wild.")
-    
+
     if owasp_findings > 0:
         summary_parts.append(f"{owasp_findings} findings correspond to OWASP Top 10 2021 categories, representing common web application security risks.")
-    
+
     # Category breakdown
     if category_counts:
         category_list = [f"{count} in {cat.lower()}" for cat, count in sorted(category_counts.items(), key=lambda x: x[1], reverse=True)]
         summary_parts.append(f"Issues were distributed as follows: {', '.join(category_list)}.")
-    
+
     summary_parts.append("The AI model's risk predictions have been combined with threat intelligence to provide actionable prioritization guidance.")
-    
+
     return " ".join(summary_parts)
 
 def generate_html_report(findings: List[Dict[str, Any]], summary: Dict[str, int], output_file: Path):
     """Generate comprehensive HTML report with GCN insights."""
-    
+
     # Categorize and sort findings
     categories = {}
     for finding in findings:
         cat = finding.get('category', 'Other')
         categories.setdefault(cat, []).append(finding)
-    
+
     # Sort categories (App first, then alphabetically)
     category_order = ['App', 'Infrastructure', 'Dependencies', 'Packages', 'Other']
     sorted_categories = {}
@@ -606,7 +607,7 @@ def generate_html_report(findings: List[Dict[str, Any]], summary: Dict[str, int]
                 -x.get('risk_score', 0)
             ))
             sorted_categories[cat] = categories[cat]
-    
+
     # Add any remaining categories
     for cat, findings_list in categories.items():
         if cat not in sorted_categories:
@@ -616,10 +617,10 @@ def generate_html_report(findings: List[Dict[str, Any]], summary: Dict[str, int]
                 -x.get('risk_score', 0)
             ))
             sorted_categories[cat] = findings_list
-    
+
     # Generate executive summary
     executive_summary = generate_executive_summary(findings)
-    
+
     template_str = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -935,7 +936,7 @@ def generate_html_report(findings: List[Dict[str, Any]], summary: Dict[str, int]
 </html>"""
 
     template = Template(template_str)
-    
+
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(template.render(
             executive_summary=executive_summary,
@@ -959,7 +960,7 @@ def main():
     api_key = os.environ.get('OPENAI_API_KEY')
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable not set")
-    
+
     client = OpenAI(api_key=api_key)
 
     # Initialize GCN vulnerability prioritizer
@@ -967,7 +968,7 @@ def main():
 
     # Load findings
     findings = load_findings(args.input_file)
-    
+
     if not findings:
         print("No findings to process")
         return
@@ -979,26 +980,26 @@ def main():
     findings = prioritizer.predict_priority(findings)
 
     # Second pass: Enhance with OpenAI analysis
-    print("\n🤖 Phase 2: Enhancement")
+    print("\n🤖 Phase 2: OpenAI Enhancement")
     processed_count = 0
     for idx, finding in enumerate(findings, 1):
         if processed_count >= args.max_requests:
             print(f"Reached maximum API requests limit ({args.max_requests})")
             break
-            
+
         print(f"Processing finding {idx}/{len(findings)}: {finding.get('title', 'Unknown')[:50]}...")
-        
+
         # Get AI analysis (this will add CVE, CVSS, EPSS, etc.)
         analysis = get_enhanced_analysis(finding, client)
         finding.update(analysis)
-        
+
         # Re-extract features now that we have more data
         if prioritizer.model:
             # Update features with new OpenAI data
             updated_features = prioritizer.extract_vulnerability_features(finding)
-        
+
         processed_count += 1
-        
+
         # Rate limiting - be nice to the API
         if idx % 10 == 0:
             time.sleep(1)
@@ -1009,7 +1010,7 @@ def main():
         risk_score, priority = calculate_hybrid_risk_score(finding)
         finding['risk_score'] = risk_score
         finding['priority'] = priority
-        
+
         # Categorize finding
         finding['category'] = categorize_finding(finding)
 
@@ -1028,7 +1029,7 @@ def main():
     print(f"   🟠 High: {summary['high']}")
     print(f"   🟡 Medium: {summary['medium']}")
     print(f"   🟢 Low: {summary['low']}")
-    
+
     # Count GCN-processed findings
     gcn_processed = sum(1 for f in findings if 'gcn_priority' in f)
     print(f"   🧠 GCN processed: {gcn_processed}/{len(findings)} ({gcn_processed/len(findings)*100:.1f}%)")
@@ -1040,7 +1041,7 @@ def main():
 
     # Generate HTML report
     generate_html_report(findings, summary, args.report)
-    
+
     print(f"\n✅ AI-Enhanced Analysis Complete!")
     print(f"   📄 Enriched findings: {args.out}")
     print(f"   📊 HTML report: {args.report}")
