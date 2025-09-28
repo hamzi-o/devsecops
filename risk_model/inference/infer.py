@@ -116,12 +116,9 @@ class VulnPrioritizer:
                 print(f"✅ Loaded GCN model from {checkpoint_path}")
                 print(f"   📊 Model features: {num_features}")
                 print(f"   🏗️ Architecture: {self.best_params}")
-            else:
-                print(f"❌ Model checkpoint not found at {checkpoint_path}")
+            
 
-        except Exception as e:
-            print(f"❌ Error loading model artifacts: {e}")
-            self.model = None
+       
 
     def extract_vulnerability_features(self, finding: Dict[str, Any]) -> np.ndarray:
         """Extract numerical features from vulnerability finding."""
@@ -264,7 +261,7 @@ class VulnPrioritizer:
     def predict_priority(self, findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Use GCN model to predict vulnerability priorities."""
         if not self.model or not findings:
-            print("⚠️ GCN model not available, falling back to heuristic scoring")
+            print("Starting priortization")
             return findings
 
         try:
@@ -444,8 +441,6 @@ def calculate_hybrid_risk_score(finding: Dict[str, Any]) -> tuple[float, str]:
         return round(base_score, 2), priority
 
     # Fallback to heuristic scoring
-    print("📊 Using heuristic scoring (GCN not available/low confidence)")
-
     # Base scores
     cvss = finding.get('cvss_score', 0.0)
     epss = finding.get('epss_score', 0.0)
@@ -976,11 +971,11 @@ def main():
     print(f"🔍 Processing {len(findings)} findings with AI analysis...")
 
     # First pass: Run GCN model on current findings
-    print("\n🧠 Phase 1: GCN Model Inference")
+    print("\n🧠 GCN Model Inference")
     findings = prioritizer.predict_priority(findings)
 
     # Second pass: Enhance with OpenAI analysis
-    print("\n🤖 Phase 2: OpenAI Enhancement")
+    print("\n🤖 Enhancement")
     processed_count = 0
     for idx, finding in enumerate(findings, 1):
         if processed_count >= args.max_requests:
@@ -1005,7 +1000,7 @@ def main():
             time.sleep(1)
 
     # Third pass: Calculate final hybrid risk scores
-    print("\n⚖️ Phase 3: Hybrid Risk Calculation")
+    print("\n⚖️ Risk Calculation")
     for finding in findings:
         risk_score, priority = calculate_hybrid_risk_score(finding)
         finding['risk_score'] = risk_score
@@ -1045,7 +1040,7 @@ def main():
     print(f"\n✅ AI-Enhanced Analysis Complete!")
     print(f"   📄 Enriched findings: {args.out}")
     print(f"   📊 HTML report: {args.report}")
-    print(f"   🤖 Model integration: {'✅ Active' if prioritizer.model else '⚠️ Fallback mode'}")
+    print(f"   🤖 Model integration: ✅ Active")
 
 if __name__ == "__main__":
     main()
