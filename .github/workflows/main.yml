@@ -222,6 +222,7 @@ jobs:
             --user $(id -u):$(id -g) \
             zaproxy/zap-stable \
             zap-full-scan.py \
+            -z "-config spider.maxDepth=10 -config spider.maxChildren=40" \
             -t "$TARGET_URL" \
             -r /zap/wrk/zap-report.html \
             -J /zap/wrk/zap-report.json \
