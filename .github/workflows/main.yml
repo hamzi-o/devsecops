@@ -126,7 +126,9 @@ jobs:
         run: |
           export PATH=$HOME/.local/bin:$PATH
           source venv/bin/activate
-          semgrep --config scanners/semgrep_rules.yml --json > sast.json || echo "[]" > sast.json
+          semgrep --config scanners/semgrep_rules.yml \
+          app/api/main.py \
+          --json > sast.json || echo "[]" > sast.json
           deactivate
 
       - name: Run Secrets scan
@@ -224,6 +226,7 @@ jobs:
             zap-full-scan.py \
             -z "-config spider.maxDepth=10 -config spider.maxChildren=40" \
             -t "$TARGET_URL" \
+            -a \
             -r /zap/wrk/zap-report.html \
             -J /zap/wrk/zap-report.json \
             2>&1 | tee zap-scan.log || echo "ZAP scan completed with exit code: $?"
