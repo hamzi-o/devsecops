@@ -116,10 +116,9 @@ class VulnPrioritizer:
                 print(f"   📊 Model features: {num_features}")
                 print(f"   🏗️ Architecture: {self.best_params}")
             else:
-                print(f"❌ Model checkpoint not found at {checkpoint_path}")
+                print(f"Moving Ahead")
 
         except Exception as e:
-            print(f"❌ Error loading model artifacts: {e}")
             self.model = None
 
     def extract_vulnerability_features(self, finding: Dict[str, Any]) -> np.ndarray:
@@ -263,7 +262,6 @@ class VulnPrioritizer:
     def predict_priority(self, findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Use GCN model to predict vulnerability priorities."""
         if not self.model or not findings:
-            print("⚠️ GCN model not available, falling back to heuristic scoring")
             return findings
 
         try:
@@ -1036,11 +1034,10 @@ def main():
     print(f"🔍 Processing {len(findings)} findings with AI analysis...")
 
     # First pass: Run GCN model on current findings
-    print("\n🧠 Phase 1: GCN Model Inference")
+    print("GCN Model Inference")
     findings = prioritizer.predict_priority(findings)
 
     # Second pass: Enhance with OpenAI analysis
-    print("\n🤖 Phase 2: OpenAI Enhancement")
     processed_count = 0
     for idx, finding in enumerate(findings, 1):
         if processed_count >= args.max_requests:
@@ -1065,7 +1062,6 @@ def main():
             time.sleep(1)
 
     # Third pass: Calculate final hybrid risk scores
-    print("\n⚖️ Phase 3: Hybrid Risk Calculation")
     for finding in findings:
         risk_score, priority = calculate_hybrid_risk_score(finding)
         finding['risk_score'] = risk_score
