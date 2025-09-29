@@ -206,7 +206,7 @@ jobs:
         run: |
           TARGET_URL="http://staging.hamza-builds.info/"
           echo "Running ZAP scan against $TARGET_URL"
-          
+          API_URL="${TARGET_URL}openapi.json"
           # Create default empty reports first
           echo '{"site":[{"@name":"'"$TARGET_URL"'","@host":"staging.hamza-builds.info","@port":"80","@ssl":"false","alerts":[]}]}' > zap-report.json
           echo "<html><body><h1>ZAP Report</h1><p>No scan data</p></body></html>" > zap-report.html
@@ -222,11 +222,16 @@ jobs:
             --user $(id -u):$(id -g) \
             zaproxy/zap-stable \
             zap-full-scan.py \
-            -z "-config spider.maxDepth=10 -config spider.maxChildren=40" \
+            # ZAP arguments for API discovery and Active Scan
             -t "$TARGET_URL" \
+            -f openapi \
+            -O "$API_URL" \
+            -a \
+            -d \
             -r /zap/wrk/zap-report.html \
             -J /zap/wrk/zap-report.json \
-            -I 2>&1 | tee zap-scan.log || echo "ZAP scan completed with exit code: $?"
+            -z "-config spider.maxDepth=10 -config scanner.attackStrength=HIGH" \
+            2>&1 | tee zap-scan.log || echo "ZAP scan completed with exit code: $?"
           
           # Verify the reports were created
           echo "=== ZAP Scan Results ==="
