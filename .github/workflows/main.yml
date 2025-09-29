@@ -124,25 +124,9 @@ jobs:
       - name: Run SAST scan
         continue-on-error: true
         run: |
-          # Ensure Semgrep is accessible via PATH or loaded correctly
           export PATH=$HOME/.local/bin:$PATH
           source venv/bin/activate
-          
-          echo "Starting Semgrep scan on ./app/api/main.py..."
-          
-          # Run Semgrep with:
-          # 1. Your custom rules
-          # 2. The standard secrets rules (p/secrets)
-          # 3. Explicit exclusion of the noisy virtual environment
-          # 4. Explicit targeting of your vulnerable file
-          
-          semgrep \
-            --config scanners/semgrep_rules.yml \
-            --config p/secrets \
-            --exclude 'venv' \
-            ./app/api/main.py \
-            --json > sast.json || echo "[]" > sast.json
-      
+          semgrep --config scanners/semgrep_rules.yml --json > sast.json || echo "[]" > sast.json
           deactivate
 
       - name: Run Secrets scan
