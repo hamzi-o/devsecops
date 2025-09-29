@@ -1,20 +1,6 @@
-# Hypothetical semgrep-config.yaml or CI command configuration
-
 rules:
 - id: py-insecure-deserialization
   message: Avoid insecure deserialization (pickle.loads)
   pattern: pickle.loads(...)
   severity: HIGH
   languages: [python]
-
-# --- ADD THESE RULES FOR COMPREHENSIVE COVERAGE ---
-
-- include:
-    # Essential rules for detecting critical Python vulnerabilities
-    - p/python-security-and-quality
-    - p/secrets
-    # Explicitly catch OS command and SQL injection
-    - p/python-os-command-injection
-    - p/python-sql-injection
-    - p/python-xss
-    - p/python-exec
