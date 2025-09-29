@@ -206,7 +206,7 @@ jobs:
         run: |
           TARGET_URL="http://staging.hamza-builds.info/"
           echo "Running ZAP scan against $TARGET_URL"
-          API_URL="${TARGET_URL}openapi.json"
+          
           # Create default empty reports first
           echo '{"site":[{"@name":"'"$TARGET_URL"'","@host":"staging.hamza-builds.info","@port":"80","@ssl":"false","alerts":[]}]}' > zap-report.json
           echo "<html><body><h1>ZAP Report</h1><p>No scan data</p></body></html>" > zap-report.html
@@ -222,16 +222,53 @@ jobs:
             --user $(id -u):$(id -g) \
             zaproxy/zap-stable \
             zap-full-scan.py \
-            # ZAP arguments for API discovery and Active Scan
+            -z "-config spider.maxDepth=10 -config spider.maxChildren=40" \
             -t "$TARGET_URL" \
-            -f openapi \
-            -O "$API_URL" \
-            -a \
-            -d \
             -r /zap/wrk/zap-report.html \
             -J /zap/wrk/zap-report.json \
-            -z "-config spider.maxDepth=10 -config scanner.attackStrength=HIGH" \
             2>&1 | tee zap-scan.log || echo "ZAP scan completed with exit code: $?"
+          
+          # Verify the reports were created
+          echo "=== ZAP Scan Results ==="
+          if [ -f zap-report.json ]; then
+            JSON_SIZE=$(wc -c < zap-report.json)
+            echo "JSON report size: $JSON_SIZE bytes"
+            
+            if [ "$JSON_SIZE" -gt 1000 ]; then
+              echo "✅ Valid JSON report generated"
+              # Show number of alerts found
+              ALERT_COUNT=$(jq -r '.site[0].alerts | length' zap-report.json 2>/dev/null || echo "unknown")
+              echo "Number of alerts found: $ALERT_COUNT"
+              
+              # Show alert types
+              if [ "$ALERT_COUNT" != "0" ] && [ "$ALERT_COUNT" != "unknown" ]; then
+                echo "Alert types found:"
+                jq -r '.site[0].alerts[] | "- \(.name) (\(.riskdesc))"' zap-report.json 2>/dev/null | head -5
+              fi
+            else
+              echo "⚠️ JSON report seems empty or small"
+            fi
+          else
+            echo "❌ JSON report not found"
+          fi
+          
+          if [ -f zap-report.html ]; then
+            HTML_SIZE=$(wc -c < zap-report.html)
+            echo "HTML report size: $HTML_SIZE bytes"
+            if [ "$HTML_SIZE" -gt 1000 ]; then
+              echo "✅ Valid HTML report generated"
+            else
+              echo "⚠️ HTML report seems empty or small"
+            fi
+          else
+            echo "❌ HTML report not found"
+          fi
+          
+          # Show scan log for debugging if needed
+          if [ -f zap-scan.log ]; then
+            echo "=== ZAP Scan Log Summary (last 20 lines) ==="
+            tail -n 20 zap-scan.log
+          fi
           
           # Verify the reports were created
           echo "=== ZAP Scan Results ==="
