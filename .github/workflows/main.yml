@@ -127,7 +127,6 @@ jobs:
           export PATH=$HOME/.local/bin:$PATH
           source venv/bin/activate
           semgrep --config scanners/semgrep_rules.yml \
-          app/api/main.py \
           --json > sast.json || echo "[]" > sast.json
           deactivate
 
