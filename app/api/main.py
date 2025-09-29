@@ -10,7 +10,13 @@ import base64
 import secrets
 from typing import Optional
 
-app = FastAPI(title="Enhanced Vulnerable DevSecOps Demo API")
+app = FastAPI(
+    title="Enhanced Vulnerable DevSecOps Demo API",
+    description="Intentionally vulnerable API for security testing and education",
+    version="1.0.0",
+    docs_url="/docs",  # Swagger UI at /docs
+    redoc_url="/redoc"  # ReDoc at /redoc
+)
 
 # --- CORS Vulnerability: Overly permissive CORS policy ---
 app.add_middleware(
@@ -329,8 +335,62 @@ def echo(payload: Echo):
 def get_item(item_id: int):
     return {"item_id": item_id, "ok": True}
 
+# --- More obvious vulnerabilities for scanner detection ---
+@app.get("/sql/{user_id}")
+def get_user_sql(user_id: str):
+    # SQL injection simulation (without real DB for safety)
+    query = f"SELECT * FROM users WHERE id = '{user_id}'"
+    return {
+        "query": query,
+        "message": f"Executing: {query}",
+        "vulnerable": True
+    }
+
+@app.get("/eval")
+def eval_code(code: str):
+    # Code injection vulnerability
+    try:
+        result = eval(code)
+        return {"code": code, "result": str(result)}
+    except Exception as e:
+        return {"error": str(e), "code": code}
+
+@app.get("/template")
+def template_injection(name: str = "user"):
+    # Server-Side Template Injection
+    template = f"Hello {name}! Your account balance is {{{{ balance }}}}"
+    return {"template": template, "rendered": template.replace("{{ balance }}", "1000")}
+
+@app.get("/xxe")
+def xxe_endpoint():
+    # XXE vulnerability indicator
+    xml_data = """<?xml version="1.0"?>
+<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+<root>&xxe;</root>"""
+    return {"xml": xml_data, "message": "XML parsing endpoint - potential XXE"}
+
+@app.get("/path-traversal")
+def read_file(filename: str = "config.txt"):
+    # Path traversal vulnerability
+    try:
+        file_path = f"./files/{filename}"
+        return {"filename": filename, "path": file_path, "message": "File access endpoint"}
+    except Exception as e:
+        return {"error": str(e)}
+
+# Add more explicit security headers issues
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    
+    # Deliberately vulnerable headers
+    response.headers["Server"] = "Apache/2.4.41 (Ubuntu)"
+    response.headers["X-Powered-By"] = "PHP/7.4.3"
+    # Missing security headers intentionally
+    # No X-Frame-Options, X-Content-Type-Options, etc.
+    
+    return response
+
 if __name__ == "__main__":
     import uvicorn
-    print("⚠️  WARNING: This is a vulnerable application for educational purposes only!")
-    print("⚠️  Do NOT deploy this in production or on public networks!")
     uvicorn.run(app, host="0.0.0.0", port=8000)
