@@ -502,7 +502,7 @@ def calculate_hybrid_risk_score(finding: Dict[str, Any]) -> tuple[float, str]:
         return round(base_score, 2), priority
 
     # Fallback to heuristic scoring
-    print("📊 Using heuristic scoring (GCN not available/low confidence)")
+    
 
     # Base scores
     cvss = finding.get('cvss_score', 0.0)
@@ -1088,7 +1088,6 @@ def main():
 
     # Count GCN-processed findings
     gcn_processed = sum(1 for f in findings if 'gcn_priority' in f)
-    print(f"   🧠 GCN processed: {gcn_processed}/{len(findings)} ({gcn_processed/len(findings)*100:.1f}%)")
 
     # Save enriched findings
     with open(args.out, 'w', encoding='utf-8') as f:
