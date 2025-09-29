@@ -334,42 +334,93 @@ def load_findings(file_path: Path) -> List[Dict[str, Any]]:
 def get_enhanced_analysis(finding: Dict[str, Any], client: OpenAI) -> Dict[str, Any]:
     """Get enhanced analysis including CVE, EPSS, CVSS, KEV, and OWASP mapping."""
 
-    # Create a detailed prompt with more context
+    # Enhanced prompt with better guidance
     prompt = f"""
-    Analyze this security finding and provide detailed vulnerability intelligence:
-    
-    Finding Details:
-    - Type: {finding['type']}
-    - Title: {finding['title']}
-    - Description: {finding.get('description', 'N/A')}
-    - Location: {finding.get('location', 'N/A')}
-    - Severity: {finding.get('severity', 'N/A')}
-    - CWE: {finding.get('cwe', 'N/A')}
-    - CVE: {finding.get('cve', 'N/A')}
-    
-    Please provide comprehensive analysis in JSON format:
-    {{
-        "cve": "Most relevant CVE ID or 'N/A' if none applicable",
-        "cvss_score": "CVSS v3.1 base score (0.0-10.0) as float",
-        "epss_score": "EPSS probability score (0.0-1.0) as float", 
-        "kev_status": "YES if in CISA KEV catalog, NO otherwise",
-        "owasp_2021": "OWASP Top 10 2021 category (A01-A10) or 'N/A'",
-        "exploit_available": "YES if public exploits exist, NO otherwise",
-        "remediation_effort": "LOW/MEDIUM/HIGH based on fix complexity",
-        "business_impact": "Brief description of potential business impact",
-        "technical_details": "Technical explanation of the vulnerability (2-3 sentences)",
-        "remediation_guidance": "Specific actionable remediation steps",
-        "confidence_level": "HIGH/MEDIUM/LOW based on analysis confidence"
-    }}
-    
-    Be specific and accurate. If information is not available or uncertain, use 'N/A' or appropriate defaults.
-    """
+You are a senior cybersecurity analyst performing detailed vulnerability assessment. Analyze this security finding with extreme precision and accuracy.
+
+CRITICAL INSTRUCTION: Do NOT generate fictional CVE numbers. Only reference CVE IDs that actually exist. If no specific CVE applies, use 'N/A'.
+
+=== FINDING DETAILS ===
+- Type: {finding['type']}
+- Title: {finding['title']} 
+- Description: {finding.get('description', 'N/A')}
+- Location: {finding.get('location', 'N/A')}
+- Severity: {finding.get('severity', 'N/A')}
+- CWE: {finding.get('cwe', 'N/A')}
+- Existing CVE: {finding.get('cve', 'N/A')}
+
+=== ANALYSIS REQUIREMENTS ===
+
+OWASP Top 10 2021 Mapping Guidelines:
+- A01: Broken Access Control → path traversal, privilege escalation, unauthorized access, missing access controls
+- A02: Cryptographic Failures → hardcoded secrets, weak encryption, plaintext storage, exposed credentials
+- A03: Injection → SQL injection, XSS, command injection, LDAP injection, template injection
+- A04: Insecure Design → business logic flaws, missing security controls by design
+- A05: Security Misconfiguration → default configs, missing headers, CORS issues, verbose errors, improper permissions
+- A06: Vulnerable Components → outdated libraries, unpatched software, known CVEs in dependencies
+- A07: Authentication Failures → weak passwords, session management issues, credential stuffing vulnerabilities
+- A08: Data Integrity Failures → insecure deserialization, software supply chain attacks
+- A09: Logging/Monitoring Failures → insufficient logging, missing security monitoring
+- A10: Server-Side Request Forgery → SSRF attacks, internal service access
+
+CVE Guidelines:
+- Only reference real, existing CVE numbers
+- If the finding relates to a general vulnerability class without a specific CVE, use 'N/A'
+- For infrastructure/configuration issues without specific CVEs, use 'N/A'
+- For custom application vulnerabilities, use 'N/A'
+
+CVSS Scoring Guidelines:
+- Base score on actual impact and exploitability
+- Consider: Attack Vector, Attack Complexity, Privileges Required, User Interaction, Scope, CIA Impact
+- Command injection: typically 8.5-9.8
+- XSS: typically 5.4-6.1
+- Path traversal: typically 6.5-7.5
+- Secret exposure: typically 7.5-8.8
+- Missing headers: typically 3.7-5.3
+
+EPSS Scoring Guidelines:
+- Real-world exploitation probability (0.0-1.0)
+- Consider: vulnerability age, exploit availability, attack surface
+- Well-known vulnerabilities: 0.1-0.9
+- Configuration issues: 0.001-0.05
+- New/specific findings: 0.001-0.01
+
+=== REQUIRED JSON OUTPUT ===
+{{
+    "cve": "Real CVE ID ONLY (e.g., CVE-2021-44228) or 'N/A' - NO FICTIONAL CVEs",
+    "cvss_score": "Realistic CVSS v3.1 base score (0.0-10.0) as float",
+    "epss_score": "Realistic EPSS probability (0.0-1.0) as float", 
+    "kev_status": "YES only if genuinely in CISA KEV catalog, otherwise NO",
+    "owasp_2021": "Most specific OWASP Top 10 2021 category (A01:2021-A10:2021) based on guidelines above",
+    "exploit_available": "YES if public exploits exist for this vulnerability type, NO otherwise",
+    "remediation_effort": "LOW/MEDIUM/HIGH based on implementation complexity",
+    "business_impact": "Concise business risk description (1-2 sentences)",
+    "technical_details": "Detailed technical explanation of the vulnerability mechanism (2-3 sentences)",
+    "remediation_guidance": "Specific, actionable remediation steps with technical details",
+    "confidence_level": "HIGH/MEDIUM/LOW based on your analysis confidence",
+    "attack_vector": "Network/Adjacent/Local/Physical based on how vulnerability is exploited",
+    "attack_complexity": "Low/High based on exploitation difficulty",
+    "privileges_required": "None/Low/High based on attacker privileges needed",
+    "user_interaction": "None/Required based on user involvement needed",
+    "exploit_maturity": "Not Defined/Unproven/Proof-of-Concept/Functional/High based on exploit availability"
+}}
+
+=== VALIDATION CHECKLIST ===
+✓ CVE field contains only real CVE numbers or 'N/A'
+✓ OWASP mapping matches vulnerability characteristics  
+✓ CVSS score reflects actual risk level
+✓ EPSS score is realistic for vulnerability type
+✓ Technical details explain the actual vulnerability mechanism
+✓ Remediation steps are specific and implementable
+
+Analyze comprehensively but stay strictly factual. Avoid speculation or fictional data.
+"""
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are a senior cybersecurity analyst with expertise in vulnerability assessment, CVSS scoring, EPSS analysis, and threat intelligence. Provide accurate, actionable security analysis."},
+                {"role": "system", "content": "You are a senior cybersecurity analyst with expertise in vulnerability assessment, CVSS scoring, EPSS analysis, and threat intelligence. Provide accurate, actionable security analysis. Never generate fictional CVE numbers."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
@@ -390,7 +441,12 @@ def get_enhanced_analysis(finding: Dict[str, Any], client: OpenAI) -> Dict[str, 
             'business_impact': result.get('business_impact', 'To be assessed'),
             'technical_details': result.get('technical_details', 'No details available'),
             'remediation_guidance': result.get('remediation_guidance', 'Review and address this finding'),
-            'confidence_level': result.get('confidence_level', 'MEDIUM')
+            'confidence_level': result.get('confidence_level', 'MEDIUM'),
+            'attack_vector': result.get('attack_vector', 'Network'),
+            'attack_complexity': result.get('attack_complexity', 'Low'),
+            'privileges_required': result.get('privileges_required', 'None'),
+            'user_interaction': result.get('user_interaction', 'None'),
+            'exploit_maturity': result.get('exploit_maturity', 'Not Defined')
         }
 
         return enhanced_data
@@ -408,7 +464,12 @@ def get_enhanced_analysis(finding: Dict[str, Any], client: OpenAI) -> Dict[str, 
             'business_impact': 'Assessment needed',
             'technical_details': 'Analysis unavailable due to API error',
             'remediation_guidance': 'Manual review required',
-            'confidence_level': 'LOW'
+            'confidence_level': 'LOW',
+            'attack_vector': 'Network',
+            'attack_complexity': 'Low',
+            'privileges_required': 'None',
+            'user_interaction': 'None',
+            'exploit_maturity': 'Not Defined'
         }
 
 def calculate_hybrid_risk_score(finding: Dict[str, Any]) -> tuple[float, str]:
